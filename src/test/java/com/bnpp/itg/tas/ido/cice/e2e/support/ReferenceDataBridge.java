@@ -51,11 +51,23 @@ public final class ReferenceDataBridge {
 
     /** {@code CREIN}, {@code DEBIN}, {@code BONUS}... — the shared Charge vocabulary a Product Charge links to. */
     public static void ensureChargeType(String chargeCode, String label, String family) {
+        ensureChargeType(chargeCode, label, family, false);
+    }
+
+    /**
+     * {@code benchmarkable} is {@code catalogue.charge_type.benchmarkable_flag} itself (BR-103 — "the traits a
+     * Product Charge carries are those of the Charge"), NOT a per-product override: {@code declareProductCharges}'s
+     * own {@code benchmarkable} request field is accepted but the live check (ERR-142, SlabRules.checkRateElements)
+     * reads the Charge's own flag. A FLOATING/BENCHMARK Slab (sc-06) therefore needs its OWN Charge code, never
+     * {@code CREIN} (already seeded {@code false} by every FIXED-rate journey, and {@code ON CONFLICT DO NOTHING}
+     * below never flips an existing row) — see sc-06-missing-rate-recovery.feature's use of {@code CREFL}.
+     */
+    public static void ensureChargeType(String chargeCode, String label, String family, boolean benchmarkable) {
         execute("""
-                INSERT INTO catalogue.charge_type (charge_code, label, family)
-                VALUES (?, ?, ?)
+                INSERT INTO catalogue.charge_type (charge_code, label, family, benchmarkable_flag)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT (charge_code) DO NOTHING
-                """, chargeCode, label, family);
+                """, chargeCode, label, family, benchmarkable);
     }
 
     public static void ensureDefaultProduct(String countryCode, String accountType, String productCode) {
@@ -81,6 +93,27 @@ public final class ReferenceDataBridge {
                 VALUES (?, ?, ?, ?, now())
                 ON CONFLICT (bank_code) DO NOTHING
                 """, bankCode, timeZone, cutOffTime, decisionScope);
+    }
+
+    /**
+     * A FIFTH instance of the same gap, found while building sc-06-missing-rate-recovery.feature:
+     * {@code catalogue.rate_index} — the Shared Index vocabulary a FLOATING/BENCHMARK Slab's {@code indexCode}
+     * must exist in (BR-113, ERR-130 on registerDerogation, ERR-437 on registerRateFixing/getFallbackRate) —
+     * has NO REST feed anywhere in {@code 1-contract-pricing-manager-api.yaml} and NO seed data on the live
+     * platform (confirmed empty by direct query). Every real Index (rate resolution, Rate Fixing registration)
+     * a real journey would use is created by an admin/reference-data process this increment does not yet
+     * expose — worth raising as a follow-up alongside the Bank / Charge Type / Default Product gaps above.
+     * <p>
+     * {@code external_index_code} is the column WireMock's CARTHAGE stubs and 1-CP's own read-back
+     * ({@code CarthageHttpClient.liveFixing}) key on — see {@code DailyAccrualFixture}'s Javadoc for why this
+     * suite always picks one CARTHAGE's mapping does not recognise.
+     */
+    public static void ensureRateIndex(String indexCode, String label, String source, String externalIndexCode, String externalIndexType) {
+        execute("""
+                INSERT INTO catalogue.rate_index (index_code, label, source, external_index_code, external_index_type)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (index_code) DO NOTHING
+                """, indexCode, label, source, externalIndexCode, externalIndexType);
     }
 
     private static void execute(String sql, Object... params) {

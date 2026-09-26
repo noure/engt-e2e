@@ -5,6 +5,8 @@ import com.bnpp.itg.tas.ido.cice.e2e.support.Config;
 import com.bnpp.itg.tas.ido.cice.e2e.support.HttpSupport;
 import com.bnpp.itg.tas.ido.cice.e2e.support.JsonObject;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -111,6 +113,23 @@ public final class ContractPricingManagerClient {
     /** {@code GET /api/profiles/{profileId}/derogations} — used to recover the {@code conditionId} a registration answered only as {@code conditionVersionId}. */
     public ApiResponse listDerogations(String profileId) {
         return http.get("/api/profiles/" + profileId + "/derogations");
+    }
+
+    // ------------------------------------------------------------------ rates (shared index, UC-60 / BR-230)
+
+    /**
+     * {@code POST /api/rates} — registers a Rate Fixing of a Shared Index, FEED provenance (no
+     * {@code X-User-Id}, no justification needed). Used by sc-06-missing-rate-recovery.feature to simulate
+     * the Index feed catching up on the target Value Date (the "retry finds it" branch, AC-29.1) or on an
+     * earlier one only (the Fallback Rate branch, AC-29.2/AC-30.1/AC-30.2, BR-230).
+     */
+    public ApiResponse registerRateFixing(String indexCode, LocalDate effectiveDate, BigDecimal value, String source) {
+        JsonObject body = JsonObject.of()
+                .with("indexCode", indexCode)
+                .with("effectiveDate", effectiveDate.toString())
+                .with("value", value)
+                .with("source", source);
+        return http.post("/api/rates", body, Map.of());
     }
 
     // ------------------------------------------------------------------ profiles (contract side)

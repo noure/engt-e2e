@@ -47,10 +47,11 @@ far"); unchecked = planned, not yet built.
   - [x] US-05-1 — The credit day produces CREIN / WHT / SOLID at the amounts of the spec's running example (scoped down: CREIN only, matches the running example's own 60.0000000000/day; WHT/SOLID deferred, see above)
   - [x] US-05-1 — The three Snapshots are persisted with identifiers, Generation 1, and their full proof (scoped down to one Snapshot — see above)
   - [ ] US-05-1 — Persistence updates Running Totals, Posted Deltas, Last Processed Value Date, Work Item PERSISTED (deferred: needs the accrual-pull endpoint, which belongs to the later US-05-7/US-11-1 batch — see the feature file's own NOTE)
-- **sc-06-missing-rate-recovery.feature** (3)
-  - [ ] US-06-1 — A Missing Rate defers the Work Item to RETRY_PENDING (1st leg of "missing rate to fallback")
-  - [ ] US-06-2 — When the retry still finds nothing, the Fallback Rate applies
-  - [ ] US-06-2 — The Fallback Rate computes provisional Snapshots and opens a Provisional Charge (last leg)
+- **sc-06-missing-rate-recovery.feature** (3, plus one built beyond the story-map's own e2e scope — see below)
+  - [x] US-06-1 — A Missing Rate defers the Work Item to RETRY_PENDING (1st leg of "missing rate to fallback") (verified green against the live platform on 2026-09-26, twice — see "What is covered so far")
+  - [x] US-06-2 — When the retry still finds nothing, the Fallback Rate applies (verified green, twice)
+  - [x] US-06-2 — The Fallback Rate computes provisional Snapshots and opens a Provisional Charge (last leg) (verified green, twice)
+  - [x] US-06-2 (AC-29.1, built on request though story-map.md §6.7 marks it "no" for e2e — "in-service; the exhausted leg is the E2E") — The single retry finds the Rate Fixing and resumes as an ordinary run without a Provisional Charge (verified green, twice)
 - **sc-08-recalculation-and-corrections.feature** (3)
   - [ ] US-08-1 — A Back Value raises a COMPLETED Recalculation Request over its range, with Generation 2 (nominal "back value to next Generation")
   - [ ] US-08-1 — The Reversal and the creation of Generation 2 happen in one step with their events
@@ -129,6 +130,70 @@ all ran green, unmodified, on the first re-run after the platform was redeployed
 rule ("never commit a journey you haven't actually run green"), this was held back until that
 re-verification; it is now committed (see "What is covered so far").
 
+## Missing-rate recovery (sc-06): two more upstream fixes verified, journey built and verified green (2026-09-26)
+
+Two blockers this project's own prior research had identified were fixed upstream between sessions,
+verified live before building on them:
+
+1. **WireMock's CARTHAGE/MCR stubs matched the wrong path/query param** (`/carthage/rate-fixings/...?date=`
+   instead of the real `/carthage/api/rates/...?valueDate=`, same pattern for MCR) — every live rate/limit
+   read-back 404'd regardless of index/account. Fixed in `c-ice-platform` commit `36531e9`. Verified live:
+   `curl http://localhost:8089/carthage/api/rates/ESTR?valueDate=2026-09-01` now returns
+   `{"rate":"0.03125000"}`.
+2. **`contract-pricing-manager`'s `getConditionsBundle` ignored the retry's own `fallback=true` parameter** —
+   `interest-servicing` already sent it on a retry's conditions-bundle read, but 1-CP's contract had no such
+   parameter and always refused with `RATE_UNAVAILABLE`, so the entire "retry still missing -> apply
+   Fallback Rate -> provisional Snapshot" half of BR-230 was dead. Fixed in `contract-pricing-manager`
+   commit `55246ae` (branch `feature/spec-completion`): `getConditionsBundle` now honors `fallback=true`,
+   resolving the nearest earlier Rate Fixing with `provenance=FALLBACK` when the live read still misses, or
+   `ERR-461` if no earlier fixing exists either. Rebuilt, redeployed, `http://localhost:9101/actuator/health`
+   confirmed 200 before this session's own re-verification.
+
+**Timing**: production defaults for `IS_RETRY_WINDOW` / `IS_DEADLINE_AFTER_CUTOFF` (PT14H / PT21H, BR-227,
+OQ-18/19) make the retry unobservable in a real-time e2e run. Both were already wired in
+`interest-servicing`'s own `application.yml` but never passed through `c-ice-platform/docker-compose.yml`.
+Added to the `interest-servicing` service's `environment:` block there (`IS_RETRY_WINDOW: PT20S`,
+`IS_DEADLINE_AFTER_CUTOFF: PT40S`), redeployed, health confirmed — see `c-ice-platform` commit `dc2a659`.
+The retry channel's own nack-wait is a hardcoded 30s (`RateLookupRetryListener`, not env-configurable), so
+the retry is actually observed roughly 30-40s after the deferral regardless of how far below that
+`IS_RETRY_WINDOW` is set — a 90s polling timeout is used throughout this journey's steps for margin.
+
+**Two reference-data gaps found while building this journey** (both bridged the same narrow,
+non-business-logic way as the four already documented under "Known gap: reference-data seeding" below):
+
+- `catalogue.rate_index` (the Shared Index vocabulary a FLOATING/BENCHMARK Slab's `indexCode` must exist
+  in, BR-113) has no REST feed and was empty on the live platform. Bridged with
+  `ReferenceDataBridge.ensureRateIndex`, always picking an `external_index_code` WireMock's CARTHAGE stub
+  does not recognise (`carthage-rate-fixing.json` only matches `EURIBOR-3M`/`ESTR`/`SOFR`) so the Missing
+  Rate this journey needs is deterministic and independent of which Value Date is used — see
+  `DailyAccrualFixture`'s Javadoc.
+- **Not a gap, but a real trap**: `benchmarkable` is `catalogue.charge_type.benchmarkable_flag` itself
+  (BR-103 — "the traits a Product Charge carries are those of the Charge"), NOT a per-product override, even
+  though `declareProductCharges`'s request body accepts its own `benchmarkable` field (silently ignored by
+  the live check, `ERR-142`). Reusing `CREIN` (already seeded `false` forever by every FIXED-rate journey,
+  and `ON CONFLICT DO NOTHING`) for a FLOATING Slab always answers `409 CHARGE_NOT_BENCHMARKABLE` — this
+  journey uses its own Charge code, `CREFL`, seeded benchmarkable from the start
+  (`ReferenceDataBridge.ensureChargeType`'s new fourth parameter).
+
+**One permission gap found**: `GET /api/provisional-charges` answers `403 FORBIDDEN` (`ERR-235`) without an
+`X-Permissions: provisional-charge.read` header — `X-User-Id` alone is not enough. `ProvisionalChargeController`'s
+own Javadoc documents this as the header Apigee would set in production; `InterestServicingClient.listProvisionalCharges`
+now sends both headers. Worth remembering for any future US-06-4 (Operations closing a case) journey too.
+
+**Confirmed NOT a gap** (initially suspected one while reading the code, disproved by actually running the
+journey — per this project's own rule of verifying against the live platform rather than trusting static
+analysis alone): `catalogue.rate_decision_rule` (BR-216's Rate Decision Rule table) is empty on the live
+platform with no feed either, but this is by design — `RateDecisionTable.of` in 3-Interest Calculation
+falls back to its own hardcoded nine normative rows "when the bundle carries none... the spec default of
+this service" (`RateDecisionTable`'s own Javadoc). No SQL bridge was needed or attempted for it.
+
+**The three e2e-scoped scenarios of `story-map.md` §6.7** (`sc-06-missing-rate-recovery.feature`) —
+Missing Rate defers to `RETRY_PENDING` (US-06-1), the Fallback Rate applies and opens a Provisional Charge
+(US-06-2, AC-29.2/AC-30.1/AC-30.2) — plus one more built on explicit request even though the story-map
+marks it "no" for e2e (AC-29.1, "the single retry finds it, resumes normally") — all ran green against the
+live platform, twice in a row with fresh `E2E`-prefixed test data each time (7 scenarios / 31 steps for the
+whole suite including sc-02/04/05, 0 failures both times).
+
 ## What is covered so far (this session)
 
 **Scaffold**: Maven project (JDK 25 via `--release 21`, matching the other C-ICE service repos'
@@ -178,12 +243,12 @@ US-05-7/US-11-1 batch).
 
 ## Next batch (suggested)
 
-The next natural slice is **US-06-1/US-06-2 (missing-rate recovery)**: a Missing Rate defers the Work
-Item to `RETRY_PENDING`, the retry still finds nothing, the Fallback Rate applies and computes
-provisional Snapshots (`sc-06-missing-rate-recovery.feature`). The WireMock CARTHAGE
-rate-fixing-unknown stub is already present in `c-ice-platform/wiremock/mappings/`, and
-`DailyAccrualFixture`/`BalanceIntakeEvents` from this batch should mostly carry over. Alternatively,
-US-10-1/10-4 (settlement) is now unblocked too, since a real Snapshot chain exists to settle.
+sc-06-missing-rate-recovery.feature (US-06-1/US-06-2) is now done — see "Missing-rate recovery" above.
+With a real Snapshot chain now provable through both the ordinary path (sc-04/sc-05) and the
+deferral/fallback path (sc-06), the next natural slices are **US-08-1 (back value to next Generation)** —
+`DailyAccrualFixture` and `BalanceIntakeEvents` should mostly carry over (a `backValue: true` Balance
+instead of a fresh one) — or **US-10-1/10-4 (settlement)**, unblocked since a real Snapshot chain exists to
+settle.
 
 ## Known gap: reference-data seeding
 
@@ -221,6 +286,14 @@ either (confirmed by reading the changelog — no `INSERT`). A balance intake fo
 refused `UNKNOWN_BANK` even when `contract.bank` already knows it — observed live before this was added.
 `support.ReferenceDataBridge.ensureInterestServicingBankReference` bridges it the same narrow, idempotent
 way as the other three.
+
+**A fifth table, found while building sc-06-missing-rate-recovery.feature**: `catalogue.rate_index` — the
+Shared Index vocabulary a FLOATING/BENCHMARK Slab's `indexCode` must exist in (BR-113, `ERR-130` on
+`registerDerogation`, `ERR-437` on `registerRateFixing`/`getFallbackRate`). No REST feed anywhere in
+`1-contract-pricing-manager-api.yaml`, confirmed empty by direct query. `support.ReferenceDataBridge.ensureRateIndex`
+bridges it the same way, always choosing an `external_index_code` outside WireMock's three known CARTHAGE
+codes (`EURIBOR-3M`/`ESTR`/`SOFR`) so the Missing Rate that journey needs is deterministic. See
+`DailyAccrualFixture`'s Javadoc.
 
 ## Known gap: the Work Item status endpoint
 
