@@ -57,9 +57,9 @@ far"); unchecked = planned, not yet built.
   - [ ] US-08-1 — The Reversal and the creation of Generation 2 happen in one step with their events
   - [ ] US-08-3 — The completion mirrored from a Recalculation Demand carries the demand id; Contracts marks it COMPLETED
 - **sc-10-settlement-execution.feature** (3)
-  - [ ] US-10-1 — A due MATURITY Settlement starts with its identity and cycle bounds (1st leg of "due date to SettlementExecuted")
-  - [ ] US-10-4 — The Settlement is persisted in one step with its proof and published once (nominal)
-  - [ ] US-10-5 — The Contract closes after its CLOSURE Settlement (last leg of "closure to last Settlement")
+  - [x] US-10-1 — A due MATURITY Settlement starts with its identity and cycle bounds (1st leg of "due date to SettlementExecuted") (verified green against the live platform on 2026-09-26, after five real defects found and fixed live — see "Settlement execution (sc-10)" below; folded into the same scenario as US-10-4 below, matching US-10-1's own DoD note "no E2E scenario of its own")
+  - [x] US-10-4 — The Settlement is persisted in one step with its proof and published once (nominal) (verified green against the live platform on 2026-09-26, twice in a row with fresh test data each time — scoped to interestNet, not the tax-adjusted netToSettle, see below)
+  - [ ] US-10-5 — The Contract closes after its CLOSURE Settlement (last leg of "closure to last Settlement") (not attempted this session — see "Next batch")
 - **sc-11-outbound-restitution-and-reporting.feature** (5)
   - [ ] US-11-1 — Accrual Pull of 12,480 Snapshots served in three pages, TAX Snapshots never split from their base
   - [ ] US-11-2 — The Settlement Accounting Flow carries header, lines and Tax Lines ("due date to Cash Entry")
@@ -194,6 +194,110 @@ marks it "no" for e2e (AC-29.1, "the single retry finds it, resumes normally") �
 live platform, twice in a row with fresh `E2E`-prefixed test data each time (7 scenarios / 31 steps for the
 whole suite including sc-02/04/05, 0 failures both times).
 
+## Settlement execution (sc-10): five real defects found and fixed live (2026-09-26)
+
+Building the settlement journey (US-10-1/US-10-4, the natural next step once a real Snapshot chain
+existed via sc-04/05/06) hit **five distinct, real, previously-invisible defects**, in sequence, each
+blocking the whole settlement path for every Contract on this platform, not just this suite's own test
+data. Four were small, clearly-scoped, high-confidence fixes and were made directly in the owning
+service repo (each its own commit there, verified with that service's own unit tests plus a full
+rebuild/redeploy of the live container before re-verifying here); the fifth is a genuine, deeper finding
+documented but deliberately not fixed. This is exactly the class of bug this project exists to catch —
+every one of them is invisible to a service's own internal Cucumber ITs, which stub the peer instead of
+calling it for real.
+
+1. **`SchedulePlanner`/`Schedule.dueDate` (1-Contract & Pricing Manager) can insert two PENDING
+   `schedule_entry` rows with the same Due Date, crashing account opening.** 1-CP's schedule
+   regeneration always covers a 12-month rolling horizon regardless of which Chosen Periodicity a
+   Contract picks (`SchedulePlanner.regenerate`, `generationDate.plusMonths(12)`), and `Schedule.dueDate`
+   shifts every SETTLEMENT Theoretical Date landing on a Saturday or a Sunday forward to the SAME
+   following Monday (BR-130) — so a naive `CALENDAR 1 DAYS` SETTLEMENT Periodicity (the fastest possible
+   test cycle) produces two or three PENDING rows sharing one Monday Due Date within that horizon,
+   violating `uq_schedule_due` (`attachment_id, charge_code, rhythm_type, due_date`) and dead-lettering
+   the whole `evt-account-lifecycle.v1` CREATED event. **Not fixed** (the correct behaviour — dedupe? cap
+   to one entry per Due Date? shift further?) is a real domain design decision, not a one-line fix, so it
+   is documented and worked around instead: `DailyAccrualFixture.openContractWithFixedRateChargeAndFastSettlement`
+   uses a WEEKLY (`CALENDAR 7 DAYS`) Periodicity anchored on a Business Day instead — a multiple of 7 days
+   recurs on the same day-of-week forever, so it never lands on a weekend and never collides, while still
+   producing an immediately-due cycle on its first Theoretical Date. Two dead-lettered
+   `interest-account-intake` events from this session's own diagnosis are a harmless, expected side
+   effect (fresh test accountIds, never retried since the consumer dead-letters rather than retries
+   forever unlike the balance-intake gap documented below).
+2. **1-CP's `settlementDue` answer never carried `allocationRows` at all — every Settlement on this
+   platform was permanently parked with `ERR-324 NO_ALLOCATION_AGREEMENT_IN_FORCE`, regardless of whether
+   a real Allocation Agreement existed.** `SettlementDueService.decide` (1-CP) and the `SettlementDue`
+   domain record had no such field; 2-Interest Servicing's own client (`ContractPricingClient.
+   toSettlementDue`) and `SettleIfDueService` already expected and checked one (built ahead of the
+   dependency), and a stale mirrored copy of the API in `interest-servicing`'s own resources
+   (`1-contract-pricing-manager-api.yaml`) incorrectly documented it as an already-shipped "increment 9 /
+   TS-09-3.1/TS-09-3.2" additive field — the REAL entrypoint `openapi.yaml` never had it, and neither did
+   the domain logic. Confirmed live: a real Contract Agreement `PUT` through the real REST feed
+   (`/api/profiles/{id}/allocation-agreements`), persisted and visible in `contract.allocation_agreement`,
+   still made every `settlementDue` read answer with no `allocationRows` at all. **Fixed** in
+   `contract-pricing-manager`: `SettlementDueService.decide` now resolves the Contract Agreement in force
+   at the cycle end, else the Bank's House Agreement, else empty (BR-324/BR-329), reusing the
+   already-existing, already-tested `AllocationAgreementRepository.contractAgreementInForce`/
+   `houseAgreementInForce`; `SettlementDue` gained the field (with a wither, old 8-arg call sites and
+   tests untouched); `ContractApiMapper`/`openapi.yaml` (`SettlementDue.allocationRows`, reusing the
+   existing `AllocationAgreementRow` schema) expose it on both `settlementDue` and `settlementDueBulk`.
+   Domain unit tests green; verified live (`curl .../settlement-due?processDate=...` now answers a
+   populated `allocationRows`).
+3. **2-Interest Servicing's own `SettlementItem` sent to 4-Settlement Computation never carried a
+   Charge's direction at all — every real settlement was refused as malformed.** `SettlementItem.charges`
+   did not exist as a field; `SettleIfDueService.build` always sent `List.of()` where 4-SC's own contract
+   expects `charges: [{chargeCode, direction}]` (BR-345). 4-SC's `SettlementItemValidator.
+   checkChargeDirections` refuses the whole item (400) the first time any Charge is involved. The data
+   was already available, unused: 1-CP's own `ConditionsBundle.ResolvedCharge` already carries
+   `family`/`eligibility` (BR-103's "the traits a Product Charge carries are those of the Charge",
+   confirmed against `catalogue.charge_type.eligibility`, default `CREDIT_POSITIVE`). **Fixed** in
+   `interest-servicing`: added `SettlementItem.ChargeDirection(chargeCode, direction)` and a `charges`
+   field, populated in `SettleIfDueService.build` from `bundle.charges()` via BR-345's own words ("CREDIT
+   for credit interest and bonus, DEBIT for debit interest"): a BONUS-family Charge is always CREDIT,
+   else `DEBIT_NEGATIVE` eligibility is DEBIT, else CREDIT. Domain unit tests green; verified live.
+4. **`ApplySettlementResultService` (2-IS, TX2) expected an `allocationId` on every settlement ENTRY that
+   4-Settlement Computation's own contract never sends — every real Settlement failed
+   `settlement_entry.allocation_id NOT NULL` at persistence.** 4-SC's `SettlementResultMapper.entry()`
+   only ever sets `allocationId` on a LINE (`SettlementLine.allocationId`, matching the api's own
+   `lines[].allocationId`), never on an Entry — `ResultEntry.allocationId()` is therefore always `null` on
+   every real response. **Fixed** in `interest-servicing`: `ApplySettlementResultService.build` now looks
+   an Entry's `allocationId` up by `lineRef` against its own Line's (already-correct) one, falling back to
+   the Entry's own field only if a future contract version ever sends it. Domain unit tests green;
+   verified live (this is the fix that finally let a Settlement actually persist).
+5. **An EXEMPT Client can never be settled on this platform at all — NOT fixed, a genuine dead end
+   found live, documented for a follow-up.** 4-SC's `SettlementItemValidator.checkTaxScheme` refuses any
+   settlement item whose Tax Conditions list is empty (`ERR-343 TAX_SCHEME_MISSING_IN_ITEM`),
+   unconditionally — no exemption carve-out. But 1-CP's `GetConditionsBundleService.getConditionsBundle`
+   deliberately skips resolving ANY Tax Condition for an exempt Client (`if (client != null &&
+   !client.taxExempt())`), so an exempt Client's Tax Conditions list is *always* empty by design. These
+   two rules are mutually exclusive for every exempt Client, platform-wide — not specific to this suite.
+   Worked around in this suite's own fixture by NOT exempting its dedicated test Client and asserting the
+   real (non-exempt) outcome instead of relying on exemption to stay tax-free.
+6. **A WHT rate-unit mismatch, found as a side effect of (5)'s workaround — NOT fixed, documented.**
+   Registering a 25% WHT (`catalogue.tax.rate = 25`, matching 1-CP's own `checkPercentage`'s `]0, 100]`
+   validation range, i.e. a percentage) on a non-exempt test Client produced a live `taxLines` amount of
+   `1500.0000` (`25 × 60`, i.e. `rate` treated as a raw multiplier/fraction downstream, not divided by 100
+   anywhere in the chain) and a `net_to_settle` of `-1440.0000` in `interestservicing.settlement` — wildly
+   wrong for a 25% WHT on a 60.00 gross interest (expected 45.00 net). The wrongly-computed amount was
+   **not** posted to any ledger entry (`getSettlements`'s own `entries` list stayed correct: one CREIN
+   CREDIT of 60.00, no WHT entry at all) — only the internal `taxLines`/`net_to_settle` figures are wrong,
+   and neither is reachable from 2-Interest Servicing's own `Settlement` REST schema (`interestNet` is the
+   only net figure it exposes; there is no `netToSettle` field on it at all, entrypoint `openapi.yaml`).
+   Not investigated further or fixed: this is a genuine computation-correctness question spanning 1-CP's
+   percentage convention and 4-SC's own reading of it (`catalogue.tax.rate`/`Tax.rate` vs `Pct`/`Money`
+   internals), squarely the kind of thing 4-SC's own internal Cucumber ITs should already cover for a
+   real (non-e2e-only) Tax Scheme, and genuinely out of scope for a quick fix here. `sc-10-settlement-
+   execution.feature`'s own scenario therefore asserts `interestNet` (the CREIN gross amount, unaffected)
+   rather than any tax-adjusted figure.
+
+**The two e2e-scoped scenarios of `story-map.md` §6.10** (US-10-1's "starts with its identity and cycle
+bounds", folded into the same scenario per its own DoD note "no E2E scenario of its own"; US-10-4's
+"persisted in one step with its proof and published once") ran green against the live platform, twice in
+a row with fresh `E2E`-prefixed (`CLI-E2E-STL-*` Client, `E2E-TS-XE` Tax Scheme, country `XE`) test data
+each time (8 scenarios / 37 steps for the whole suite including sc-02/04/05/06, 0 failures both times).
+This is also the first journey to consume a real outbox topic (`interest-settlement-output`) rather than
+only produce to one, and the first to use a real Tax Scheme (bridged the same narrow, idempotent,
+non-colliding way as the other reference-data gaps below).
+
 ## What is covered so far (this session)
 
 **Scaffold**: Maven project (JDK 25 via `--release 21`, matching the other C-ICE service repos'
@@ -241,14 +345,40 @@ Charge (CREIN) only, no WHT/SOLID (blocked on the separate CARTHAGE client stub 
 assertion on Running Totals/Posted Deltas/Work Item PERSISTED (needs the accrual-pull endpoint, a later
 US-05-7/US-11-1 batch).
 
+**One verified-green journey, settlement execution**: US-10-1/US-10-4, "A due MATURITY Settlement starts
+with its identity and cycle bounds and is persisted in one step with its proof, published once"
+(`sc-10-settlement-execution.feature`) — see "Settlement execution (sc-10)" above for the five real
+defects this uncovered (four fixed live in `contract-pricing-manager`/`interest-servicing`, one
+documented). Real HTTP-delivered Contract with a weekly SETTLEMENT Periodicity anchored on a Business
+Day, a real Kafka balance intake triggering 2-Interest Servicing's own synchronous settle-if-due step
+(right after TX1 commits, no separate trigger call), a real call to 4-Settlement Computation's
+`/api/v1/settle`, the Settlement persisted in TX2 and published exactly once — observed through both a
+real HTTP read (`getSettlements`) and a real consumed record on `interest-settlement-output`
+(`evt-settlement-executed.v1`), the first journey of this suite to consume a real outbox topic. Run
+twice in a row against the live platform on 2026-09-26, both green (8 scenarios / 37 steps for the whole
+suite, 0 failures both times), each with fresh test data (dedicated `CLI-E2E-STL-*` Client ids, country
+`XE`, Tax Scheme `E2E-TS-XE`). Scoped to `interestNet` (not the tax-adjusted `netToSettle`, which has no
+REST field at all and whose live WHT computation is a separate, undiagnosed finding — see point 6 above).
+
 ## Next batch (suggested)
 
-sc-06-missing-rate-recovery.feature (US-06-1/US-06-2) is now done — see "Missing-rate recovery" above.
-With a real Snapshot chain now provable through both the ordinary path (sc-04/sc-05) and the
-deferral/fallback path (sc-06), the next natural slices are **US-08-1 (back value to next Generation)** —
-`DailyAccrualFixture` and `BalanceIntakeEvents` should mostly carry over (a `backValue: true` Balance
-instead of a fresh one) — or **US-10-1/10-4 (settlement)**, unblocked since a real Snapshot chain exists to
-settle.
+sc-06-missing-rate-recovery.feature (US-06-1/US-06-2) and sc-10-settlement-execution.feature (US-10-1/
+US-10-4) are now done — see their own sections above. The natural next slices, roughly in order of
+expected effort:
+
+- **US-10-5 (closure to last Settlement)** — `sc-10-settlement-execution.feature`'s own third, unchecked
+  scenario: a Pre-closure (`POST /api/profiles/{id}/pre-closure`, real REST) sets the Term Date, a CLOSED
+  account event (real Kafka, `AccountIntakeEvents` already builds CREATED — CLOSED needs a small
+  addition) triggers the last-calculation demand and a CLOSURE Settlement, and `closeProfile` finally
+  closes the Contract. The settlement fixture/plumbing this batch just built (fast SETTLEMENT cycle,
+  Allocation Agreement, Tax Scheme, Kafka consumer on `interest-settlement-output`) should carry over
+  directly — the new parts are the pre-closure call, the CLOSED event, and polling `GET
+  /api/profiles/{id}` for status `CLOSED`.
+- **US-08-1 (back value to next Generation)** — `DailyAccrualFixture` and `BalanceIntakeEvents` should
+  mostly carry over (a `backValue: true` Balance instead of a fresh one).
+- **sc-12 (reference-data-and-external-feeds)** — likely a light extension of the already-verified US-02-1
+  journey asserted from the Account Replica side instead (worth checking whether it needs its own
+  scenario at all, per the story-map's own note).
 
 ## Known gap: reference-data seeding
 
@@ -295,6 +425,22 @@ bridges it the same way, always choosing an `external_index_code` outside WireMo
 codes (`EURIBOR-3M`/`ESTR`/`SOFR`) so the Missing Rate that journey needs is deterministic. See
 `DailyAccrualFixture`'s Javadoc.
 
+**A sixth table, found while building sc-10-settlement-execution.feature**: `catalogue.tax_scheme`
+(`scheme_code` PK, `country_code` with a `uq_scheme_country` UNIQUE constraint — one scheme per country
+ever) has no creation endpoint either: `POST /api/taxes` (`upsertTax`) is a genuine feed for a TAX ROW of
+an EXISTING scheme, but refuses `ERR-449 UNKNOWN_TAX_SCHEME` outright when the scheme does not already
+exist (confirmed reading `UpsertTaxService.upsert`'s first line), and nothing else creates that row.
+`support.ReferenceDataBridge.ensureTaxScheme`/`ensureTax` bridge both (the Tax row too, not just the
+scheme: `catalogue.tax` keys on `(tax_code, from_date)` with a plain INSERT, no upsert semantics, so a
+rerun on the same calendar day would collide on that primary key with no clean 409 to tolerate through
+the real feed — bridged with `ON CONFLICT DO NOTHING` and a fixed, far-past `fromDate` instead). Given
+the one-per-country constraint, this suite uses a dedicated country (`XE`) exclusively for the settlement
+journey's own Client, never the shared `ZZ` every other journey's no-tax scope relies on and never a real
+country a human tester's own running example might still need (BANK-FR/FR's own TS-FR) — see
+`DailyAccrualFixture.openContractWithFixedRateChargeAndFastSettlement`'s Javadoc for the full reasoning,
+including why an EXEMPT Client was tried first and ruled out (a genuine, separate platform dead end, see
+"Settlement execution (sc-10)" point 5 above).
+
 ## Known gap: the Work Item status endpoint
 
 `GET /api/work/{workId}` (2-Interest Servicing) is unusable with its own documented work identifier
@@ -311,18 +457,31 @@ off-hot-path reads that do not need this endpoint. Worth raising as a follow-up:
 `ALLOW_ENCODED_SLASH` for this route, or change the path to take `eventId` and `profileId` as two
 segments or query parameters.
 
-## Known gap: the CARTHAGE client stub
+## Known gap: the CARTHAGE client stub — RESOLVED (2026-09-26), with one new dead end found
 
 `GetConditionsBundleService.resolveClient` (1-Contract & Pricing Manager) reads Client facts — country,
 tax-exemption — with a LIVE call to CARTHAGE (BR-435, "never replicated, read fresh") for every bundle
-resolution that has at least one resolved Charge. `c-ice-platform/wiremock/mappings/` has stubs for
-CARTHAGE's rate-fixing endpoints (`carthage-rate-fixing*.json`) but **none for its client endpoint** — no
-`/carthage/clients/...` mapping exists at all, so every client lookup 404s. `resolveClient` treats a miss
-as "no Client, no tax exemption known" and silently returns an empty Tax Conditions list — no error, no
-anomaly — so a Charge taxed by the spec (CREIN's WHT/SOLID in the running example) computes with no tax
-at all on the live platform today, for every contract, not only this suite's fresh test data. Worth
-raising as a follow-up: add a `carthage-client.json` wildcard stub (the same pattern as the existing
-`mcr-limit.json`) answering a country code and `taxExempt: false` for any client id.
+resolution that has at least one resolved Charge. `c-ice-platform/wiremock/mappings/` had stubs for
+CARTHAGE's rate-fixing endpoints (`carthage-rate-fixing*.json`) but none for its client endpoint,
+confirmed by every client lookup 404-ing (`resolveClient` treats a miss as "no Client, no tax exemption
+known", silently returning an empty Tax Conditions list — no error, no anomaly).
+
+**Resolved this session** while building sc-10-settlement-execution.feature, which needed a resolved
+Client at all (4-Settlement Computation refuses a settlement item with no `clientId`, unlike the accrual
+path which tolerates a missing Client silently): added `carthage-client.json`, a wildcard stub (the same
+pattern as the existing `mcr-limit.json`) answering `countryCode: "FR"`, `category: "RETAIL"`, `taxExempt:
+false`, `usPerson: false` for any Client id — this also benefits the spec's own running example (CLI-4471,
+BANK-FR) the next time it is exercised manually through the UI, which previously got the same 404/no-tax
+silence. A second, higher-priority mapping (`carthage-client-settlement.json`) answers ONLY this suite's
+own `CLI-E2E-STL-*` Client ids with a dedicated country (`XE`) instead, so this suite's own settlement
+journey never claims `catalogue.tax_scheme`'s one-per-country slot for the real `FR` (see "Known gap:
+reference-data seeding", sixth table, above).
+
+**One new dead end found while wiring this up**: an EXEMPT Client (`taxExempt: true`) can never actually
+be settled on this platform — see "Settlement execution (sc-10)" point 5 above for the full account
+(1-CP skips resolving any Tax Condition for an exempt Client by design; 4-SC's own validator
+unconditionally refuses an empty Tax Conditions list regardless of exemption). Not fixed; this suite's own
+settlement journey works around it by using a non-exempt test Client instead.
 
 ## Project layout
 
@@ -334,8 +493,8 @@ src/test/java/com/bnpp/itg/tas/ido/cice/e2e/
              exact-decimal JSON parsing), JsonSupport/JsonObject (Jackson), KafkaSupport (real
              producer/consumer helpers), AccountIntakeEvents / BalanceIntakeEvents (build real
              evt-account-lifecycle.v1 / evt-balance-intake.v1 payloads), ReferenceDataBridge (the
-             documented SQL exceptions above), DailyAccrualFixture (shared Contract+Derogation setup
-             for the sc-04/sc-05 journeys, not yet verified green — see "Blocking defect")
+             documented SQL exceptions above), DailyAccrualFixture (shared Contract+Derogation setup for
+             the sc-04/05/06/10 journeys, including the settlement-specific fast-cycle/Tax Scheme variant)
   steps/     Cucumber step definitions, one class per .feature file
   runner/    CucumberSuite — the JUnit 5 Suite entry point (`mvn test`)
 src/test/resources/features/   one .feature file per story-map §6 subsection with an e2e row
@@ -367,7 +526,9 @@ JVM from an earlier interrupted run of this project).
 
 The PostgreSQL instance is shared with a human tester using the UI at `http://localhost:4200`. Every
 piece of data this suite creates is prefixed distinctively (`E2E-` products/conditions, `E2E<hex>`
-banks, `ACC-E2E-...` accounts, `CLI-E2E-...` clients, country `ZZ`) so it is trivially recognisable
-and filterable, and this suite never performs a destructive operation (no `DELETE`, no `DROP`, no
-`TRUNCATE`) — only the ordinary creates a real journey would perform, plus the narrowly-scoped
-reference-data inserts documented above.
+banks, `ACC-E2E-...` accounts, `CLI-E2E-...` clients, country `ZZ`; the settlement journey additionally
+uses `CLI-E2E-STL-...` clients, country `XE` and Tax Scheme `E2E-TS-XE` — a second, disjoint
+reserved-for-private-use country code, kept apart from the shared `ZZ` precisely so it never adds tax to
+every other journey's no-tax scope) so it is trivially recognisable and filterable, and this suite never
+performs a destructive operation (no `DELETE`, no `DROP`, no `TRUNCATE`) — only the ordinary creates a
+real journey would perform, plus the narrowly-scoped reference-data inserts documented above.

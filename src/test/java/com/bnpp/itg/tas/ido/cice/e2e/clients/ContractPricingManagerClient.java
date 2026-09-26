@@ -141,4 +141,20 @@ public final class ContractPricingManagerClient {
     public ApiResponse getProfile(String profileId) {
         return http.get("/api/profiles/" + profileId);
     }
+
+    // ------------------------------------------------------------------ allocation & netting (settlement, UC-46..52)
+
+    /**
+     * {@code PUT /api/profiles/{profileId}/allocation-agreements?fromDate=...} — replaces the Contract
+     * Agreement rows in force for a profile (BR-324). Real REST, no reference-data bridge needed. Read back
+     * by {@code settlementDue}'s own {@code allocationRows} (TS-09-3.1/3.2) and required non-empty by
+     * 2-Interest Servicing's settle-if-due step before it will persist a Settlement at all (ERR-324/NO_
+     * ALLOCATION_AGREEMENT_IN_FORCE otherwise, observed live while building sc-10-settlement-execution.feature).
+     * {@code fromDate} is a required query parameter, not a body field — the entrypoint's own
+     * {@code openapi.yaml} (14.1.1 addition) is the source of truth here; a mirrored copy consumed by
+     * 2-Interest Servicing's own generated client still shows it missing.
+     */
+    public ApiResponse setAllocationAgreements(String profileId, LocalDate fromDate, List<Map<String, Object>> rows) {
+        return http.put("/api/profiles/" + profileId + "/allocation-agreements?fromDate=" + fromDate, rows, HttpSupport.userHeader("e2e-operations"));
+    }
 }

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import org.apache.kafka.clients.producer.KafkaProducer;
 
 import java.math.BigDecimal;
+import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -68,6 +69,100 @@ public final class DailyAccrualFixture {
         return common.opened();
     }
 
+    /**
+     * sc-10-settlement-execution.feature: a Contract priced exactly like {@link #openContractWithFixedRateCharge},
+     * but with the SETTLEMENT rhythm's offered (and therefore Chosen, BR-122 "the first-declared Offered
+     * Periodicity per Charge and Rhythm") Periodicity set to {@code CALENDAR every 7 DAYS} instead of every
+     * 1 MONTH, and a 100%-to-self Allocation Agreement already in force ({@code PUT
+     * /api/profiles/{profileId}/allocation-agreements}, real REST, BR-324) — both needed for 2-Interest
+     * Servicing's {@code SettleIfDueService} (the synchronous settle-if-due step right after a balance
+     * intake's own TX1 commits) to actually persist a MATURITY Settlement rather than merely defer or park
+     * one: an empty {@code allocationRows} answer parks the whole attempt (ERR-324
+     * NO_ALLOCATION_AGREEMENT_IN_FORCE, ContractPricingManager's own
+     * {@code /api/profiles/{profileId}/allocation-agreements} PUT is a real feed, no reference-data bridge
+     * needed, unlike the gaps documented in README.md).
+     *
+     * <p><b>Why 7 DAYS, not 1 DAY</b> — a genuine defect found live while building this fixture (see
+     * README.md "Blocking defect found this session: SETTLEMENT schedule regeneration can insert two
+     * PENDING entries with the same Due Date"): 1-CP's own 12-month regeneration horizon
+     * ({@code SchedulePlanner.regenerate}, always {@code generationDate.plusMonths(12)} regardless of which
+     * anchor date this fixture picks) always spans several weekends, and {@code Schedule.dueDate} shifts
+     * EVERY SETTLEMENT Theoretical Date that falls on a Saturday or a Sunday forward to the SAME following
+     * Monday (BR-130) — so a {@code CALENDAR 1 DAYS} SETTLEMENT Periodicity always produces two or three
+     * PENDING rows sharing one Monday Due Date sooner or later, which collides with the
+     * {@code uq_schedule_due} unique constraint on {@code (attachment_id, charge_code, rhythm_type, due_date)}
+     * and dead-letters the whole account-opening event. A weekly ({@code CALENDAR 7 DAYS}) interval anchored
+     * on a Business Day recurs on that SAME day-of-week forever (7 is a multiple of the week), so it never
+     * lands on a weekend and never collides — while still producing an immediately-due cycle on its very
+     * first (and only, for this scenario) Theoretical Date.
+     *
+     * <p>The Contract's opening date (and therefore the Chosen Periodicity's {@code fromDate}, and therefore
+     * its one-day cycle's Theoretical/Due Date) is deliberately the most recent BUSINESS day on or before
+     * real "today" (Mon-Fri only — this suite's fresh E2E bank carries no extra Bank Holiday) instead of
+     * {@code LocalDate.now()} verbatim, unlike {@link #openContractWithFixedRateCharge}: 2-Interest
+     * Servicing's own {@code SettleIfDueService.settleIfDue} asks 1-CP's {@code settlementDue} with ITS OWN
+     * real wall-clock "now" as the Process Date ({@code clock.processDate()}) — NOT the Balance's own Value
+     * Date — so on a weekend the Due Date (always shifted forward to a Business Day, BR-130) would otherwise
+     * land on the coming Monday, AFTER a Process Date of Saturday/Sunday, and never fire. Anchoring on the
+     * most recent Business Day instead keeps the single-day cycle due immediately regardless of which day of
+     * the week this suite happens to run on.
+     *
+     * <p><b>The Client and its Tax Scheme</b> — 4-Settlement Computation refuses a settlement item with no
+     * resolved Client at all (400 "clientInfo.clientId must not be null") AND, once resolved, one with an
+     * empty Tax Conditions list (ERR-343 TAX_SCHEME_MISSING_IN_ITEM, {@code SettlementItemValidator.
+     * checkTaxScheme}) — both found live building this fixture. A THIRD wrinkle ruled out an EXEMPT Client as
+     * the easy way to keep this journey tax-free: {@code GetConditionsBundleService.getConditionsBundle}
+     * skips resolving any Tax Condition at all for an exempt Client by design ({@code
+     * !client.taxExempt()}), so an exempt Client's Tax Conditions list is ALWAYS empty — which
+     * {@code checkTaxScheme} then unconditionally refuses anyway (no exemption carve-out there). An exempt
+     * Client can therefore never be settled on this platform today (worth raising as a follow-up); this
+     * fixture instead resolves its own Client (only for {@code CLI-E2E-STL-*} ids, see {@code
+     * carthage-client-settlement.json}, a higher-priority WireMock mapping than the generic {@code
+     * carthage-client.json} every other journey's Client resolves through) to a dedicated country — never
+     * {@code ZZ} (the shared Bank/Country of every other journey, which must stay tax-free) and never a real
+     * country (so this suite never claims {@code catalogue.tax_scheme}'s one-per-country slot a human
+     * tester's own running example, e.g. BANK-FR/FR, might still need) — NOT exempt, with one real WHT Tax
+     * bridged for it ({@code catalogue.tax_scheme} has no creation feed either, see {@code
+     * ReferenceDataBridge.ensureTaxScheme}'s own Javadoc), and asserts the real net-of-WHT amount instead of
+     * a clean, tax-free one. {@code XE} is one of ISO 3166-1's own reserved-for-private-use codes, exactly
+     * the same rationale as {@code ZZ} elsewhere in this suite, just a second, disjoint one.
+     */
+    private static final String SETTLEMENT_CLIENT_COUNTRY = "XE";
+    private static final String SETTLEMENT_TAX_SCHEME = "E2E-TS-XE";
+
+    public static OpenedContract openContractWithFixedRateChargeAndFastSettlement(String chargeCode, BigDecimal fixedRate, String dayBasis) {
+        ContractPricingManagerClient cp = new ContractPricingManagerClient();
+        LocalDate settlementAnchor = mostRecentBusinessDay(LocalDate.now());
+        List<Map<String, Object>> fastSettlementOptions = List.of(
+                Map.of("rhythmType", "CALCULATION", "anchor", "CALENDAR", "intervalMonthsDays", 1, "monthsOrDays", "DAYS"),
+                Map.of("rhythmType", "SETTLEMENT", "anchor", "CALENDAR", "intervalMonthsDays", 7, "monthsOrDays", "DAYS"));
+        // See this method's own Javadoc ("The Client and its Tax Scheme") for why a real, non-exempt WHT is
+        // bridged here rather than an exempt Client used as a shortcut.
+        ReferenceDataBridge.ensureTaxScheme(SETTLEMENT_TAX_SCHEME, SETTLEMENT_CLIENT_COUNTRY);
+        ReferenceDataBridge.ensureTax("E2E-WHT", LocalDate.of(2000, 1, 1), SETTLEMENT_TAX_SCHEME, "e2e WHT (25%, on GROSS_POSITIVE_CREDIT_INTEREST)",
+                new BigDecimal("25"), "GROSS_POSITIVE_CREDIT_INTEREST", 1);
+        Common common = openCommon(cp, chargeCode, false, settlementAnchor, fastSettlementOptions, "CLI-E2E-STL-");
+        registerAndValidateFixedDerogation(cp, common.contractId, chargeCode, fixedRate, dayBasis, common.openingDate);
+        Map<String, Object> hundredPercentToSelfRow = new java.util.LinkedHashMap<>();
+        hundredPercentToSelfRow.put("chargeCode", "All");
+        hundredPercentToSelfRow.put("taxCode", "none");
+        hundredPercentToSelfRow.put("direction", "all");
+        hundredPercentToSelfRow.put("cycleCurrentFlag", "all");
+        hundredPercentToSelfRow.put("postingAccountId", null);
+        hundredPercentToSelfRow.put("pctAllocation", 100);
+        hundredPercentToSelfRow.put("label", "e2e 100% to self");
+        require(cp.setAllocationAgreements(common.contractId, settlementAnchor, List.of(hundredPercentToSelfRow)), 200, "setAllocationAgreements");
+        return common.opened();
+    }
+
+    private static LocalDate mostRecentBusinessDay(LocalDate date) {
+        LocalDate d = date;
+        while (d.getDayOfWeek() == DayOfWeek.SATURDAY || d.getDayOfWeek() == DayOfWeek.SUNDAY) {
+            d = d.minusDays(1);
+        }
+        return d;
+    }
+
     /** Everything shared between the FIXED and FLOATING setups, up to (not including) the Derogation itself. */
     private record Common(String testId, String countryCode, String bankId, String productCode, String accountId,
                            LocalDate openingDate, String contractId, String attachmentId) {
@@ -76,7 +171,27 @@ public final class DailyAccrualFixture {
         }
     }
 
+    private static final List<Map<String, Object>> DEFAULT_FREQUENCY_OPTIONS = List.of(
+            Map.of("rhythmType", "CALCULATION", "anchor", "CALENDAR", "intervalMonthsDays", 1, "monthsOrDays", "DAYS"),
+            Map.of("rhythmType", "SETTLEMENT", "anchor", "CALENDAR", "intervalMonthsDays", 1, "monthsOrDays", "MONTHS"));
+
     private static Common openCommon(ContractPricingManagerClient cp, String chargeCode, boolean benchmarkable) {
+        return openCommon(cp, chargeCode, benchmarkable, LocalDate.now(), DEFAULT_FREQUENCY_OPTIONS, "CLI-E2E-");
+    }
+
+    /**
+     * @param openingDate the Contract's opening date AND the {@code fromDate} every offered Periodicity's
+     *                    default Chosen row inherits (BR-122) — {@code LocalDate.now()} for every journey
+     *                    except the fast-settlement one, which anchors on the most recent Business Day instead
+     *                    (see {@link #openContractWithFixedRateChargeAndFastSettlement}'s own Javadoc).
+     * @param frequencyOptions the Product's offered Periodicities per (Charge, Rhythm) — the first-declared
+     *                         one per Rhythm becomes the Contract's default Chosen Periodicity at opening.
+     * @param clientIdPrefix distinguishes which WireMock CARTHAGE client mapping resolves this journey's own
+     *                       Client (see {@link #openContractWithFixedRateChargeAndFastSettlement}'s Javadoc) —
+     *                       {@code CLI-E2E-} for every other journey, {@code CLI-E2E-STL-} for settlement.
+     */
+    private static Common openCommon(ContractPricingManagerClient cp, String chargeCode, boolean benchmarkable,
+                                      LocalDate openingDate, List<Map<String, Object>> frequencyOptions, String clientIdPrefix) {
         String testId = String.format("%08X", System.nanoTime() & 0xFFFFFFFFL);
         String countryCode = "ZZ";
         String bankId = "E2E" + testId;
@@ -99,17 +214,13 @@ public final class DailyAccrualFixture {
                 "taxCodes", List.of(),
                 "benchmarkable", benchmarkable);
         require(cp.declareCharges(productCode, PROPOSER, List.of(productCharge)), 200, "declareCharges");
-        List<Map<String, Object>> options = List.of(
-                Map.of("rhythmType", "CALCULATION", "anchor", "CALENDAR", "intervalMonthsDays", 1, "monthsOrDays", "DAYS"),
-                Map.of("rhythmType", "SETTLEMENT", "anchor", "CALENDAR", "intervalMonthsDays", 1, "monthsOrDays", "MONTHS"));
-        require(cp.declareFrequencyOptions(productCode, chargeCode, PROPOSER, options), 200, "declareFrequencyOptions");
+        require(cp.declareFrequencyOptions(productCode, chargeCode, PROPOSER, frequencyOptions), 200, "declareFrequencyOptions");
         require(cp.proposeProduct(productCode, PROPOSER), 200, "proposeProduct");
         require(cp.validateProduct(productCode, VALIDATOR), 200, "validateProduct");
         ReferenceDataBridge.ensureDefaultProduct(countryCode, "CURRENT", productCode);
 
         String accountId = "ACC-E2E-" + testId;
-        LocalDate openingDate = LocalDate.now();
-        String accountEvent = AccountIntakeEvents.createdAccount(accountId, bankId, "CLI-E2E-" + testId, "EUR", "CURRENT", openingDate);
+        String accountEvent = AccountIntakeEvents.createdAccount(accountId, bankId, clientIdPrefix + testId, "EUR", "CURRENT", openingDate);
         try (KafkaProducer<String, String> producer = KafkaSupport.producer()) {
             KafkaSupport.publish(producer, "interest-account-intake", accountId, accountEvent);
         }

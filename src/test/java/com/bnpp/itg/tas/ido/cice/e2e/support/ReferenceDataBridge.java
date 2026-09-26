@@ -116,6 +116,45 @@ public final class ReferenceDataBridge {
                 """, indexCode, label, source, externalIndexCode, externalIndexType);
     }
 
+    /**
+     * A SIXTH instance of the same gap, found while building sc-10-settlement-execution.feature:
+     * {@code catalogue.tax_scheme} (scheme code, country code, {@code uq_scheme_country} — one scheme per
+     * country) has no creation endpoint at all — {@code POST /api/taxes} ({@code upsertTaxUseCase.upsert})
+     * is a genuine feed for a TAX ROW of an EXISTING scheme, but refuses {@code ERR-449 UNKNOWN_TAX_SCHEME}
+     * outright when {@code registry.schemeExists(schemeCode)} answers false (confirmed by reading
+     * {@code UpsertTaxService.upsert}, first line of the method), and no other path creates that row. Given
+     * {@code uq_scheme_country} allows only ONE scheme per country ever, this suite uses a dedicated,
+     * never-reused country code exclusively for the settlement journey's own Client — never the shared
+     * {@code ZZ} every other journey's Bank/Country uses (that would retroactively add a Tax Scheme to
+     * sc-04/05/06's own no-tax scope) and never a real country the running example or a human tester might
+     * still register the REAL Tax Scheme for (BANK-FR's own TS-FR, the spec's running example). See
+     * {@code DailyAccrualFixture.openContractWithFixedRateChargeAndFastSettlement}'s Javadoc.
+     */
+    public static void ensureTaxScheme(String schemeCode, String countryCode) {
+        execute("""
+                INSERT INTO catalogue.tax_scheme (scheme_code, country_code)
+                VALUES (?, ?)
+                ON CONFLICT (scheme_code) DO NOTHING
+                """, schemeCode, countryCode);
+    }
+
+    /**
+     * The one Tax row of {@link #ensureTaxScheme}'s scheme — bridged rather than sent through the real
+     * {@code POST /api/taxes} feed because that feed's own {@code catalogue.tax} table keys on
+     * {@code (tax_code, from_date)} with a plain INSERT, no upsert semantics (confirmed reading
+     * {@code TaxRegistry.append}/{@code UpsertTaxService.upsert}): a rerun on the same calendar day with the
+     * same effective date would collide on that primary key with no clean 409 to tolerate, unlike this
+     * suite's other {@code ON CONFLICT DO NOTHING} bridges. A fixed, far-past {@code fromDate} keeps this
+     * idempotent across reruns.
+     */
+    public static void ensureTax(String taxCode, LocalDate fromDate, String schemeCode, String label, java.math.BigDecimal rate, String computationBasis, int applyOrder) {
+        execute("""
+                INSERT INTO catalogue.tax (tax_code, from_date, scheme_code, label, rate, computation_basis, apply_order)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (tax_code, from_date) DO NOTHING
+                """, taxCode, fromDate, schemeCode, label, rate, computationBasis, applyOrder);
+    }
+
     private static void execute(String sql, Object... params) {
         try (Connection connection = DriverManager.getConnection(Config.postgresJdbcUrl(), Config.postgresUser(), Config.postgresPassword());
              PreparedStatement statement = connection.prepareStatement(sql)) {
