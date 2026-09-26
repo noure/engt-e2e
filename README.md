@@ -59,7 +59,7 @@ far"); unchecked = planned, not yet built.
 - **sc-10-settlement-execution.feature** (3)
   - [x] US-10-1 — A due MATURITY Settlement starts with its identity and cycle bounds (1st leg of "due date to SettlementExecuted") (verified green against the live platform on 2026-09-26, after five real defects found and fixed live — see "Settlement execution (sc-10)" below; folded into the same scenario as US-10-4 below, matching US-10-1's own DoD note "no E2E scenario of its own")
   - [x] US-10-4 — The Settlement is persisted in one step with its proof and published once (nominal) (verified green against the live platform on 2026-09-26, twice in a row with fresh test data each time — scoped to interestNet, not the tax-adjusted netToSettle, see below)
-  - [ ] US-10-5 — The Contract closes after its CLOSURE Settlement (last leg of "closure to last Settlement") (not attempted this session — see "Next batch")
+  - [ ] US-10-5 — The Contract closes after its CLOSURE Settlement (last leg of "closure to last Settlement") (built this session — feature scenarios and step definitions exist in the working tree, NOT committed: blocked live on a platform-wide gap, one real defect already fixed — see "Closure to last Settlement (sc-10 US-10-5)" below)
 - **sc-11-outbound-restitution-and-reporting.feature** (5)
   - [ ] US-11-1 — Accrual Pull of 12,480 Snapshots served in three pages, TAX Snapshots never split from their base
   - [ ] US-11-2 — The Settlement Accounting Flow carries header, lines and Tax Lines ("due date to Cash Entry")
@@ -298,6 +298,130 @@ This is also the first journey to consume a real outbox topic (`interest-settlem
 only produce to one, and the first to use a real Tax Scheme (bridged the same narrow, idempotent,
 non-colliding way as the other reference-data gaps below).
 
+## Closure to last Settlement (sc-10 US-10-5): one real defect fixed live, two more found and BLOCKING — not committed
+
+Building US-10-5 (`UC-14`/`UC-52`, "the Contract closes after its CLOSURE Settlement") hit three more
+distinct, real, previously-invisible defects in the same family as the five sc-10 found before it. One is
+fixed and verified live; the other two are genuine, deeper findings that together make **it currently
+impossible for any Contract to ever close on this platform**, regardless of this suite's own scenario
+design — documented here in full rather than forced, per this project's own rule. The journey's own code
+(the feature scenarios, the new `ContractPricingManagerClient.preClose`/`closeProfile`/
+`listRecalculationDemands`, `AccountIntakeEvents.closedAccount`, `SettlementExecutionSteps`' new step
+definitions) is written and compiles, but **is not committed**: it cannot be run green against the live
+platform until defect 2 below is fixed upstream, and this project's own rule is to never commit a journey
+it has not actually run green. It stays in the working tree for whoever picks this batch up next.
+
+1. **Fixed and verified live: `RecalcTriggerSender` (1-Contract & Pricing Manager) never sent the
+   `X-Service-Id` header 2-Interest Servicing's own `triggerRecalculation` requires (BR-235).**
+   `RecalculationController.triggerRecalculation` (2-IS) reads `request.getHeader("X-Service-Id")` and
+   refuses `ERR-235` ("permission: the service identity of the Contracts context") whenever it does not
+   equal 2-IS's own configured `contracts-service-id` (default `CONTRACTS-SVC`, `IS_CONTRACTS_SERVICE_ID`).
+   `RecalcTriggerSender`'s `POST /api/work/recalc` never set this header at all — confirmed live:
+   `contract.outbox` rows of type `RECALC_TRIGGER` were `FAILED` after exactly 1 attempt with
+   `last_error = "2-IS refused the recalculation trigger: 403 FORBIDDEN"` for every Recalculation Demand
+   this application had ever raised (this suite's own CLOSURE demands, and by the same code path every
+   CONDITION_CHANGE/PRODUCT_CHANGE/RATE_FIXING demand too — a platform-wide gap, not specific to closure).
+   Since ERR-235 answers 403 (not a 5xx), `RecalcTriggerSender`'s own Javadoc rule ("another 4xx is a
+   refusal") means the row is never retried: the demand stays `PENDING` forever. Invisible to both
+   services' own internal Cucumber ITs, which stub/mock the peer instead of asserting this header
+   (confirmed reading `DerogationSteps`/`OutboxRelaySteps` in 1-CP's own test suite: their WireMock stubs
+   match on path only). **Fixed** in `contract-pricing-manager` (commit `93881b5`, branch
+   `feature/spec-completion`): a new `contract-pricing.identity.service-id` property (`CPM_SERVICE_ID`,
+   default `CONTRACTS-SVC`, matching 2-IS's own default) is now sent as `X-Service-Id` on every targeted
+   call. Rebuilt, redeployed, `http://localhost:9101/actuator/health` confirmed 200; re-verified live —
+   the same outbox row now shows `status = SENT`, `attempts = 0`. This fix alone is real, correct, and
+   already deployed, independent of the two findings below; **not** scoped down or worked around, a
+   straight fix.
+
+2. **The root blocker — NOT fixed, a genuine platform-wide gap: nothing in `contract-pricing-manager` ever
+   marks a `SETTLEMENT` `schedule_entry` row `DONE` once 2-Interest Servicing actually executes the real
+   Settlement.** Confirmed by reading every write path that touches `contract.schedule_entry.status`:
+   `SchedulePlanner.regenerate`/`preClose` only ever write `PENDING` or `CANCELLED`
+   (`ScheduleJdbcAdapter.updateStatus`, the only `UPDATE ... SET status` in the codebase) — no code path
+   anywhere sets `status = 'DONE'`. 1-Contract & Pricing Manager does not even consume
+   `interest-settlement-output` (`evt-settlement-executed.v1`, the event 2-Interest Servicing actually
+   publishes once a Settlement executes) — confirmed by an exhaustive grep for that topic/event name across
+   1-CP's own source: zero matches outside a single unrelated Javadoc reference. Reproduced live end to end
+   with a real Contract (`PRF-000114`): a real MATURITY Settlement executed and persisted correctly
+   (`evt-settlement-executed.v1` observed on the real topic, confirmed by this suite's own already-passing
+   scenario), yet `SELECT * FROM contract.schedule_entry WHERE due_date = '2026-09-25'` still shows that
+   SETTLEMENT entry `status = PENDING` — never transitioned. Two concrete, independently-observed
+   consequences of this single gap:
+   - **`SettlementDueService.cycleStart`/`cycleStartOf`** (BR-340's own cycle-bounds resolution) filters
+     schedule entries for `status = DONE` to find the start of the NEXT cycle; finding none, ever, it always
+     falls back to the Product Attachment's own `fromDate` (the Contract's opening date). For a Contract's
+     very FIRST cycle this fallback is coincidentally correct (which is exactly why the already-passing
+     MATURITY scenario, and the missing-rate/accrual journeys before it, never surfaced this) — but for a
+     SECOND cycle it is wrong: confirmed live, `GET /api/profiles/PRF-000114/settlement-due?processDate=
+     2026-09-26` (a Contract already past one executed MATURITY Settlement on 2026-09-25) answers
+     `cycleStart: 2026-09-25` instead of `2026-09-26`, so the second cycle's own gather wrongly re-includes
+     the FIRST cycle's already-`SETTLED` Snapshot. 2-Interest Servicing's own `SettleIfDueService` correctly
+     detects this as an internally-inconsistent answer and parks the whole attempt rather than settle
+     something wrong (`ERR-330 SETTLEMENT_CYCLE_NOT_READY`, `AnomalyPolicy.REPORT`, confirmed live: "Cycle
+     2026-09-25 → 2026-09-26 of PRF-000114 holds an already settled snapshot (84); the settlement is
+     parked") — the SAFETY NET works, but the underlying cause is this gap, and the Settlement never
+     executes at all as a result.
+   - **`CloseContractService.close`** reads `schedule.lastSettlementDone(contractId, termDate)` — the SAME
+     "no row is ever `DONE`" gap — to decide `lastSettlementExecuted` for BR-134's own closure guard
+     (`Contract.close`'s `if (!lastSettlementExecuted) throw ERR_164`). Since this is always empty,
+     **`lastSettlementExecuted` is always `false`, so `Contract.close` always throws `ERR-164` and no
+     Contract can ever reach `CLOSED` on this platform today**, independent of everything else in UC-14/UC-52
+     being otherwise correctly wired (the Pre-closure, the CLOSED event, the demand, the CLOSURE Settlement
+     itself all worked correctly in this session's own live tracing once defect 1 was fixed and the race in
+     finding 3 below was designed around).
+
+   Worth raising as a follow-up: 1-CP needs a way to learn a Settlement executed — most plausibly consuming
+   `evt-settlement-executed.v1` on `interest-settlement-output` and marking the matching `schedule_entry`
+   `DONE` with its `settlement_id` (the column already exists and is already read, just never written) — a
+   real architectural addition, not a one-line fix, and squarely 1-CP's own domain decision to make.
+
+3. **A second, independent defect found while tracing why demand completion still didn't self-heal defect
+   2's own guard refusal — NOT fixed, a genuine Spring transaction-propagation bug.**
+   `CompleteRecalculationDemandService.complete` (1-CP) — the handler UC-52's own E1 relies on to replay the
+   closure once a demand completes — calls `close.close(contract.id())` as a best-effort side attempt,
+   wrapped in `try { ... } catch (BusinessRuleViolation deferredAgain) { /* BR-134: defers, never blocks */ }`.
+   Both `complete` and `close` are proxied use cases (`TransactionalUseCases.wrap`, `PROPAGATION_REQUIRED`
+   `TransactionTemplate`s) — since `close.close(...)` is called FROM WITHIN `complete`'s own already-active
+   transaction, it PARTICIPATES in (joins) that same physical transaction rather than starting a new one.
+   When `close.close(...)` throws `ERR_164` (defect 2 above guarantees it always does), Spring marks the
+   PARTICIPATING transaction rollback-only before re-throwing — a local `catch` cannot undo that. `complete`'s
+   own code swallows the exception and returns normally, but its outer transaction then fails to commit:
+   confirmed live, every one of this session's own `interest-recalculation-events` records was dead-lettered
+   with `org.springframework.transaction.UnexpectedRollbackException: Transaction silently rolled back
+   because it has been marked as rollback-only` (`RecalculationEventsListener`'s own log). The practical
+   effect is strictly worse than BR-134's own intent ("the closure defers, it never blocks"): the ENTIRE
+   completion event is lost (dead-lettered, not retried), which rolls back not just the optimistic `close()`
+   attempt but the Recalculation Demand's own `COMPLETED` transition and the `processed_event` dedup row too
+   — confirmed live, `contract.recalculation_demand.status` stayed `PENDING` forever and
+   `contract.processed_event` never gained a single row for this channel, even though 2-Interest Servicing's
+   own `recalculation_request` row genuinely reached `COMPLETED` and its own completion event was genuinely
+   `SENT`. Would very likely still surface even after defect 2 is fixed, the day a demand's own re-evaluated
+   closure attempt is refused for any OTHER BR-134 reason (e.g. a second PENDING demand, E14) — worth fixing
+   independently, most plausibly by calling `close.close(...)` through a `REQUIRES_NEW` propagation (or
+   catching further out, after `complete`'s own transaction has already committed) so a deferred closure can
+   never poison the demand-completion transaction that is supposed to survive it.
+
+**How this was diagnosed** (verified by tracing, not guessed, per this project's own rule): every claim
+above is backed by a live reproduction — direct, read-only `psql` queries against the shared PostgreSQL
+(`contract.outbox`, `contract.schedule_entry`, `contract.recalculation_demand`, `contract.processed_event`,
+`interestservicing.recalculation_request`, `interestservicing.work_item`, `interestservicing.outbox`), a
+real `GET .../settlement-due` call, and the two services' own container logs
+(`docker logs c-ice-contract-pricing-manager-1`). No source file was modified for findings 2 or 3 beyond
+reading them.
+
+**Test design tried and ruled out, for the next session's benefit**: the fixture originally used a single
+one-day cycle (Term Date equal to the fixture's own first Settlement due date) to sidestep needing any prior
+Balance at all — this actually raced with `TriggerRecalculationService`'s own `ProfileMutex`, which locks on
+the Account/Pool id in `ProcessBalanceIntakeService` but on the profileId everywhere else (including
+`TriggerRecalculationService` itself), so the two never actually exclude each other (BR-212's own "never
+interleaved" promise silently broken — a fourth, real, minor concurrency defect, also not fixed, also
+documented here for completeness, though moot once the fixture below sidesteps it). Redesigning the fixture
+to a two-day shape (an ordinary first Balance and its own MATURITY Settlement, THEN the Pre-closure with Term
+Date the day after) avoided both that race and a related `TriggerRecalculationService` 404 (it needs an
+existing `ProfileProgress` ledger row, refused `NOT_FOUND` — permanently, never retried — for a Contract
+that never received any Balance yet) — but then hit defect 2 above, which no test-side fixture redesign can
+work around.
+
 ## What is covered so far (this session)
 
 **Scaffold**: Maven project (JDK 25 via `--release 21`, matching the other C-ICE service repos'
@@ -363,19 +487,25 @@ REST field at all and whose live WHT computation is a separate, undiagnosed find
 ## Next batch (suggested)
 
 sc-06-missing-rate-recovery.feature (US-06-1/US-06-2) and sc-10-settlement-execution.feature (US-10-1/
-US-10-4) are now done — see their own sections above. The natural next slices, roughly in order of
-expected effort:
+US-10-4) are done — see their own sections above. US-10-5 (closure to last Settlement) was attempted this
+session: its code is written (feature scenarios, step definitions, client methods — see "Closure to last
+Settlement (sc-10 US-10-5)" above) but **not committed**, blocked live on a platform-wide gap in
+`contract-pricing-manager` (nothing ever marks a `SETTLEMENT` schedule entry `DONE`, so `Contract.close`
+always refuses `ERR-164` — no Contract can close on this platform today). The natural next slices, roughly
+in order of expected effort:
 
-- **US-10-5 (closure to last Settlement)** — `sc-10-settlement-execution.feature`'s own third, unchecked
-  scenario: a Pre-closure (`POST /api/profiles/{id}/pre-closure`, real REST) sets the Term Date, a CLOSED
-  account event (real Kafka, `AccountIntakeEvents` already builds CREATED — CLOSED needs a small
-  addition) triggers the last-calculation demand and a CLOSURE Settlement, and `closeProfile` finally
-  closes the Contract. The settlement fixture/plumbing this batch just built (fast SETTLEMENT cycle,
-  Allocation Agreement, Tax Scheme, Kafka consumer on `interest-settlement-output`) should carry over
-  directly — the new parts are the pre-closure call, the CLOSED event, and polling `GET
-  /api/profiles/{id}` for status `CLOSED`.
+- **US-10-5 (closure to last Settlement) — RESUME ONCE THE PLATFORM GAP IS FIXED, don't rebuild from
+  scratch.** The working tree already has everything: `sc-10-settlement-execution.feature`'s two new
+  scenarios, `SettlementExecutionSteps`' new step definitions (including the two-day fixture shape that
+  sidesteps the OTHER two findings — the `ProfileMutex` race and the `TriggerRecalculationService` 404),
+  `ContractPricingManagerClient.preClose`/`closeProfile`/`listRecalculationDemands`,
+  `AccountIntakeEvents.closedAccount`. Once 1-CP is wired to mark a `schedule_entry` `DONE` on
+  `evt-settlement-executed.v1` (or however the platform owner decides to close that gap), rebuild/redeploy
+  `contract-pricing-manager`, re-run this suite, and — if genuinely green — commit it, updating this
+  README's own checklist and "What is covered so far".
 - **US-08-1 (back value to next Generation)** — `DailyAccrualFixture` and `BalanceIntakeEvents` should
-  mostly carry over (a `backValue: true` Balance instead of a fresh one).
+  mostly carry over (a `backValue: true` Balance instead of a fresh one). Unaffected by anything found in
+  this session's own closure investigation (a different code path).
 - **sc-12 (reference-data-and-external-feeds)** — likely a light extension of the already-verified US-02-1
   journey asserted from the Account Replica side instead (worth checking whether it needs its own
   scenario at all, per the story-map's own note).
