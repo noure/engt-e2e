@@ -77,7 +77,13 @@ public final class HttpSupport {
             String raw = response.body();
             JsonNode json = MissingNode.getInstance();
             if (raw != null && !raw.isBlank()) {
-                json = JsonSupport.MAPPER.readTree(raw);
+                // exact decimals (BigDecimal, not double): a Snapshot's Raw Amount is compared at scale 10
+                // (README "Nothing is rounded") — the same reader configuration the services themselves use
+                // to parse the intake payload (BalanceIntakeParser).
+                json = JsonSupport.MAPPER.reader()
+                        .with(com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+                        .with(com.fasterxml.jackson.databind.node.JsonNodeFactory.withExactBigDecimals(true))
+                        .readTree(raw);
             }
             return new ApiResponse(response.statusCode(), json, raw);
         } catch (IOException e) {

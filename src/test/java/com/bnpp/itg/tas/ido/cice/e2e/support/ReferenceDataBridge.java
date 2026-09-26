@@ -5,6 +5,7 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.LocalDate;
+import java.time.LocalTime;
 
 /**
  * KNOWN GAP, documented in README.md "Known gap: reference-data seeding". Country and Currency DO have
@@ -63,6 +64,23 @@ public final class ReferenceDataBridge {
                 VALUES (?, ?, ?)
                 ON CONFLICT (country_code, account_type) DO UPDATE SET product_code = EXCLUDED.product_code
                 """, countryCode, accountType, productCode);
+    }
+
+    /**
+     * ANOTHER instance of the same gap, found while building the daily-accrual journeys (sc-04, sc-05):
+     * {@code interestservicing.bank_reference} is 2-Interest Servicing's OWN Bank/Cut-off replica — table
+     * comment "fed by the reference feed; seeded until 1-CP serves it" (02-ledger-tables.yaml) — separate
+     * from {@code contract.bank} above (1-Contract & Pricing Manager's own copy) and, like it, has NO REST
+     * feed and NO seed data: a balance intake for a Bank absent here is refused with UNKNOWN_BANK
+     * (confirmed live), even when {@code contract.bank} already knows the Bank. Every Bank this suite opens
+     * a Contract at must therefore be seeded on BOTH sides.
+     */
+    public static void ensureInterestServicingBankReference(String bankCode, String timeZone, LocalTime cutOffTime, String decisionScope) {
+        execute("""
+                INSERT INTO interestservicing.bank_reference (bank_code, time_zone, cut_off_time, decision_scope, updated_at)
+                VALUES (?, ?, ?, ?, now())
+                ON CONFLICT (bank_code) DO NOTHING
+                """, bankCode, timeZone, cutOffTime, decisionScope);
     }
 
     private static void execute(String sql, Object... params) {

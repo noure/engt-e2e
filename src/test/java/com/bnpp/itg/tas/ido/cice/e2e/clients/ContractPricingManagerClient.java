@@ -94,6 +94,25 @@ public final class ContractPricingManagerClient {
         return http.post("/api/conditions/" + conditionId + "/versions/" + versionNo + "/validate", null, HttpSupport.userHeader(requester));
     }
 
+    // ------------------------------------------------------------------ derogations (negotiated pricing, UC-15)
+
+    /**
+     * {@code POST /api/profiles/{profileId}/derogations} — registers a NEGOTIATED tariff (own Condition, own
+     * first version, PROPOSED). Prices nothing until validated (UC-18) — see {@link #validateConditionVersion}.
+     * Used by the daily-accrual journeys (sc-04, sc-05) as the real-REST way to set a Contract-level Day Basis
+     * (BR-139): the fresh {@code ZZ} test country has no row in {@code catalogue.day_basis_rule} (DEFAULT scope,
+     * no feed at all — a gap, see README.md), but a Derogation's own {@code dayBasis} writes the DEROGATION
+     * scope row, which {@code getConditionsBundle} checks first.
+     */
+    public ApiResponse registerDerogation(String profileId, Map<String, Object> derogationRequest, String requester) {
+        return http.post("/api/profiles/" + profileId + "/derogations", derogationRequest, HttpSupport.userHeader(requester));
+    }
+
+    /** {@code GET /api/profiles/{profileId}/derogations} — used to recover the {@code conditionId} a registration answered only as {@code conditionVersionId}. */
+    public ApiResponse listDerogations(String profileId) {
+        return http.get("/api/profiles/" + profileId + "/derogations");
+    }
+
     // ------------------------------------------------------------------ profiles (contract side)
 
     public ApiResponse getProfileByAccount(String accountId) {

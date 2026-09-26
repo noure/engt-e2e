@@ -40,4 +40,10 @@ public final class InterestServicingClient {
     public ApiResponse getSettlements(String profileId) {
         return http.get("/api/profiles/" + profileId + "/settlements");
     }
+
+    // NOTE: no getWorkStatus(workId) wrapper — GET /api/work/{workId} is unusable with its own documented
+    // work identifier format (eventId + "/" + profileId): a literal "/" does not match the {workId} path
+    // template (404, confirmed live) and an encoded "%2F" is rejected by Tomcat before routing (400 "invalid
+    // character", confirmed live). See README.md "Known gap: the Work Item status endpoint". This suite
+    // observes intake and computation outcomes through getPositions and getSnapshots instead.
 }

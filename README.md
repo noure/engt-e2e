@@ -39,14 +39,14 @@ far"); unchecked = planned, not yet built.
   - [ ] US-03-4 — A validated retroactive Derogation raises a PENDING Recalculation Demand and one targeted call to 2-IS
   - [ ] US-03-4 — The demand completes when Interest Servicing reports the request completed
 - **sc-04-daily-balance-intake.feature** (3)
-  - [ ] US-04-1 — A certified Nominal Balance is recorded, a Work Item is created, EVT-BalanceReceived is emitted
-  - [ ] US-04-1 — A redelivered event whose Work Item is PERSISTED is a no-op (at-least-once redelivery)
+  - [x] US-04-1 — A certified Nominal Balance is recorded, a Work Item is created, EVT-BalanceReceived is emitted (verified green against the live platform on 2026-09-26, after the `findProfileByAccount` fix — see "What is covered so far"; EVT-BalanceReceived itself is not observed directly, see the feature file's own NOTE)
+  - [x] US-04-1 — A redelivered event whose Work Item is PERSISTED is a no-op (at-least-once redelivery) (verified green against the live platform on 2026-09-26)
   - [ ] US-04-5 — A parked Balance is attached and computed when the Contract of its Account opens
 - **sc-05-daily-accrual-computation.feature** (4)
-  - [ ] US-05-1 — The terms of a Value Date are resolved fresh (nominal "intake to Snapshot")
-  - [ ] US-05-1 — The credit day produces CREIN / WHT / SOLID at the amounts of the spec's running example
-  - [ ] US-05-1 — The three Snapshots are persisted with identifiers, Generation 1, and their full proof
-  - [ ] US-05-1 — Persistence updates Running Totals, Posted Deltas, Last Processed Value Date, Work Item PERSISTED
+  - [x] US-05-1 — The terms of a Value Date are resolved fresh (nominal "intake to Snapshot") (verified green against the live platform on 2026-09-26; scoped down to one Charge, no WHT/SOLID — see the feature file's own NOTE on the CARTHAGE client stub gap)
+  - [x] US-05-1 — The credit day produces CREIN / WHT / SOLID at the amounts of the spec's running example (scoped down: CREIN only, matches the running example's own 60.0000000000/day; WHT/SOLID deferred, see above)
+  - [x] US-05-1 — The three Snapshots are persisted with identifiers, Generation 1, and their full proof (scoped down to one Snapshot — see above)
+  - [ ] US-05-1 — Persistence updates Running Totals, Posted Deltas, Last Processed Value Date, Work Item PERSISTED (deferred: needs the accrual-pull endpoint, which belongs to the later US-05-7/US-11-1 batch — see the feature file's own NOTE)
 - **sc-06-missing-rate-recovery.feature** (3)
   - [ ] US-06-1 — A Missing Rate defers the Work Item to RETRY_PENDING (1st leg of "missing rate to fallback")
   - [ ] US-06-2 — When the retry still finds nothing, the Fallback Rate applies
@@ -67,6 +67,67 @@ far"); unchecked = planned, not yet built.
   - [ ] US-11-6 — The report of a Process Date consolidates intake and settlement Anomalies
 - **sc-12-reference-data-and-external-feeds.feature** (1)
   - [ ] US-12-1 — A CREATED account event creates the Account Replica and opens the Contract (same wiring as US-02-1, asserted from the replica side — likely a light extension of the US-02-1 journey rather than a new one)
+
+## Blocking defect found this session (2026-09-26): every balance intake crashes — RESOLVED
+
+**Resolved later the same session (2026-09-26).** `interest-servicing` commit `e15e9a5`, "Fix:
+findProfileByAccount's missing second hop caused every balance intake to NPE", was merged and the
+`c-ice-interest-servicing-1` container was rebuilt and redeployed from the branch carrying the fix,
+confirmed healthy (`http://localhost:9102/actuator/health` → 200) before re-verification. The
+daily-accrual chain (`sc-04-daily-balance-intake.feature`, `sc-05-daily-accrual-computation.feature`)
+was then re-run against the live platform, twice, both green with fresh `E2E`-prefixed test data each
+time (14 steps then 18 steps including the full suite, 0 failures) — see "What is covered so far" for
+the verified detail. **The two permanently-retrying poisoned `interest-balance-intake` offsets flagged
+below are a separate, still-open concern** — they are pre-existing messages from before the fix, not
+something this session's re-verification could clear (Kafka topics are append-only); still worth the
+platform owner's attention. The original diagnosis is kept below verbatim for the audit trail.
+
+**The entire daily-accrual chain (US-04-1, US-05-1, and by extension US-06-1/06-2) was blocked on the
+build prior to the fix above.** This is exactly the class of bug this project exists to catch — invisible to
+each service's own internal Cucumber ITs, which mock the peer instead of calling it for real — so it is
+reported here in full rather than silently worked around.
+
+**Root cause**: `2-interest-servicing/provider/.../client/ContractPricingClient.findProfileByAccount`
+(`provider/src/main/java/com/bnpp/itg/tas/ido/cice/interestservicing/provider/client/ContractPricingClient.java`,
+the `findProfileByAccount` method) calls 1-CP's real `GET /api/profiles/by-account/{id}` and maps the
+answer straight through `toProfile(JsonNode)` — the SAME mapper `findProfile(profileId)` uses for `GET
+/api/profiles/{id}`. But the two endpoints answer different shapes: `by-account` returns 1-CP's narrow
+`ProfileReference` (`profileId`, `bankId`, `status` only — confirmed against `1-contract-pricing-manager-api.yaml`
+and against `ProfileController.getProfileByAccount`, which explicitly returns `ProfileReference`), while
+`toProfile` unconditionally reads `currency` and calls `Objects.requireNonNull` on it inside
+`ContractProfile`'s constructor. Every real balance intake therefore throws a `NullPointerException:
+currency` inside `RecordBalanceIntakeService.record` step 4 (BR-204), for every Account, on the very
+first Balance ever delivered for it — not something specific to this suite's fresh `E2E`/`ZZ` test data.
+`interest-servicing/CLAUDE.md` (around the UC-64 entry) itself describes `findProfileByAccount` as a
+"two-hop path" — implying the intended design already knew a second call to `GET /api/profiles/{id}`
+(the endpoint that DOES carry `currency`) was needed to get the full picture; the implementation is
+missing that second hop.
+
+**Impact observed live**: `BalanceIntakeListener`'s error handler (`KafkaConfiguration`, by design —
+"retries forever with backoff", `ExponentialBackOff` capped at 60s, NFR-40) means the exception does not
+drop the message: the partition seeks back to the same offset and retries it forever. Two of this
+session's test runs each published one real `interest-balance-intake` record before this was diagnosed;
+both are now permanently retrying every 60s on the live `interest-servicing` container until the bug is
+fixed and the container restarted (or the consumer group's offset is advanced past them) — flagging this
+so the platform's owner is aware; not something this project can undo (Kafka topics are append-only, and
+restarting the shared container was judged too disruptive to do unilaterally, and would not clear the
+poisoned offset either — the messages would simply be retried again from the same point).
+
+**What this session did NOT do**: modify `interest-servicing`'s source. That repo is not this project's
+and had unrelated work in progress in its own working tree at the time (`git status` showed uncommitted
+changes to `SettleIfDueService`/`SnapshotRepository` and others, on `feature/spec-completion`) — fixing
+`findProfileByAccount` belongs to that repo's own maintainers, not to a same-session drive-by edit from
+the e2e suite.
+
+**Everything else needed no further changes once the fix landed**: `sc-04-daily-balance-intake.feature`
+and `sc-05-daily-accrual-computation.feature`, their step definitions (`steps/BalanceIntakeSteps.java`,
+`steps/AccrualComputationSteps.java`), the shared `support/DailyAccrualFixture.java` (opens a fresh
+Contract and prices one Charge via a validated Derogation — see its own Javadoc for why not a catalogue
+Default Condition), `support/BalanceIntakeEvents.java` (the real `evt-balance-intake.v1` payload
+builder) and the `registerDerogation`/`listDerogations`/reference-data additions to the clients below —
+all ran green, unmodified, on the first re-run after the platform was redeployed. Per this project's own
+rule ("never commit a journey you haven't actually run green"), this was held back until that
+re-verification; it is now committed (see "What is covered so far").
 
 ## What is covered so far (this session)
 
@@ -97,14 +158,32 @@ each with its own freshly-generated `E2E`-prefixed test data.
 in the `.feature` file: the current `api/v14.2/1-contract-pricing-manager-api.yaml` has no `GET` that
 reads a Contract's Chosen Periodicities back. Worth a follow-up once that read exists.
 
+**Two verified-green journeys, the daily-accrual chain**: US-04-1, "A certified Nominal Balance is
+recorded and its Work Item runs to completion" plus its at-least-once-redelivery companion
+(`sc-04-daily-balance-intake.feature`), and US-05-1, "The credit day resolves fresh terms, computes the
+Charge and persists the Snapshot with its proof" (`sc-05-daily-accrual-computation.feature`) — the
+walking-skeleton proof the mandate calls out: a real HTTP-delivered Contract, a real Kafka balance
+intake, 2-Interest Servicing reading 1-Contract & Pricing Manager's real ConditionsBundle, 2-IS calling
+3-Interest Calculation's real `/api/v1/compute`, and the result persisted back in 2-IS, all observed
+purely through real HTTP reads and a real Kafka publish.
+
+Blocked earlier this session on `interest-servicing`'s `ContractPricingClient.findProfileByAccount`
+NPE-ing on every real balance intake (see "Blocking defect found this session" — now resolved). Re-run
+against the live platform on 2026-09-26 after the fix (`interest-servicing` commit `e15e9a5`) was
+deployed: green twice in a row (14 steps, then 18 steps for the full suite including US-02-1, 0
+failures), each with fresh `E2E`-prefixed test data. Scoped down per the feature files' own NOTEs: one
+Charge (CREIN) only, no WHT/SOLID (blocked on the separate CARTHAGE client stub gap below), and no
+assertion on Running Totals/Posted Deltas/Work Item PERSISTED (needs the accrual-pull endpoint, a later
+US-05-7/US-11-1 batch).
+
 ## Next batch (suggested)
 
-The next natural slice is the **daily accrual chain**: US-04-1 (balance intake) → US-05-1 (accrual
-computation, all four rows) → US-06-1/06-2 only if a missing-rate scenario is convenient to stage via
-the WireMock CARTHAGE stub. That is the "create a product → equip a contract → balance arrives → the
-daily run computes and persists a Snapshot" backbone the mandate calls out, continuing directly from
-the Contract this batch already opens. US-10-1/10-4 (settlement) is the batch after that once a
-Snapshot chain exists to settle.
+The next natural slice is **US-06-1/US-06-2 (missing-rate recovery)**: a Missing Rate defers the Work
+Item to `RETRY_PENDING`, the retry still finds nothing, the Fallback Rate applies and computes
+provisional Snapshots (`sc-06-missing-rate-recovery.feature`). The WireMock CARTHAGE
+rate-fixing-unknown stub is already present in `c-ice-platform/wiremock/mappings/`, and
+`DailyAccrualFixture`/`BalanceIntakeEvents` from this batch should mostly carry over. Alternatively,
+US-10-1/10-4 (settlement) is now unblocked too, since a real Snapshot chain exists to settle.
 
 ## Known gap: reference-data seeding
 
@@ -135,16 +214,55 @@ instead of this bridge.
 wiring, not to design 1-CP's admin surface): an admin/reference-data REST endpoint for Bank and for
 Default Product designation, matching the one Country and Currency already have.
 
+**A fourth table, found while building the daily-accrual journeys**: `interestservicing.bank_reference`
+— 2-Interest Servicing's OWN Bank/Cut-off replica, separate from `contract.bank` above, table comment
+"fed by the reference feed; seeded until 1-CP serves it" (`02-ledger-tables.yaml`). No feed, no seed data
+either (confirmed by reading the changelog — no `INSERT`). A balance intake for a Bank absent here is
+refused `UNKNOWN_BANK` even when `contract.bank` already knows it — observed live before this was added.
+`support.ReferenceDataBridge.ensureInterestServicingBankReference` bridges it the same narrow, idempotent
+way as the other three.
+
+## Known gap: the Work Item status endpoint
+
+`GET /api/work/{workId}` (2-Interest Servicing) is unusable with its own documented work identifier
+format (`eventId + "/" + profileId`, `WorkId.value()`): a literal `/` does not match the single-segment
+`{workId}` path template (404, confirmed live — Spring routes it as two path segments against a
+one-segment template) and an encoded `%2F` is rejected by Tomcat before routing at all (400 "invalid
+character", confirmed live). The route itself is reachable — a slash-free id correctly reaches
+`WorkId.parse` and answers `400 VALIDATION_FAILED` — so this is not a deployment issue, it is the
+endpoint's own path design: it can never be called with a real two-part identifier over plain HTTP
+(would need the id URL-encoded with a server configured to accept encoded slashes, or a query parameter,
+or two separate path segments). This suite observes intake and computation outcomes through
+`GET /api/profiles/{id}/positions` and `GET /api/profiles/{id}/snapshots` instead — both real, working,
+off-hot-path reads that do not need this endpoint. Worth raising as a follow-up: either enable
+`ALLOW_ENCODED_SLASH` for this route, or change the path to take `eventId` and `profileId` as two
+segments or query parameters.
+
+## Known gap: the CARTHAGE client stub
+
+`GetConditionsBundleService.resolveClient` (1-Contract & Pricing Manager) reads Client facts — country,
+tax-exemption — with a LIVE call to CARTHAGE (BR-435, "never replicated, read fresh") for every bundle
+resolution that has at least one resolved Charge. `c-ice-platform/wiremock/mappings/` has stubs for
+CARTHAGE's rate-fixing endpoints (`carthage-rate-fixing*.json`) but **none for its client endpoint** — no
+`/carthage/clients/...` mapping exists at all, so every client lookup 404s. `resolveClient` treats a miss
+as "no Client, no tax exemption known" and silently returns an empty Tax Conditions list — no error, no
+anomaly — so a Charge taxed by the spec (CREIN's WHT/SOLID in the running example) computes with no tax
+at all on the live platform today, for every contract, not only this suite's fresh test data. Worth
+raising as a follow-up: add a `carthage-client.json` wildcard stub (the same pattern as the existing
+`mcr-limit.json`) answering a country code and `taxExempt: false` for any client id.
+
 ## Project layout
 
 ```
 src/test/java/com/bnpp/itg/tas/ido/cice/e2e/
   clients/   one HTTP client class per service (ContractPricingManagerClient, InterestServicingClient,
              InterestCalculationClient, SettlementComputationClient, RestitutionClient)
-  support/   Config (base URLs, env-overridable), HttpSupport + ApiResponse (java.net.http wrapper),
-             JsonSupport/JsonObject (Jackson), KafkaSupport (real producer/consumer helpers),
-             AccountIntakeEvents (builds real evt-account-lifecycle.v1 payloads),
-             ReferenceDataBridge (the one documented SQL exception above)
+  support/   Config (base URLs, env-overridable), HttpSupport + ApiResponse (java.net.http wrapper,
+             exact-decimal JSON parsing), JsonSupport/JsonObject (Jackson), KafkaSupport (real
+             producer/consumer helpers), AccountIntakeEvents / BalanceIntakeEvents (build real
+             evt-account-lifecycle.v1 / evt-balance-intake.v1 payloads), ReferenceDataBridge (the
+             documented SQL exceptions above), DailyAccrualFixture (shared Contract+Derogation setup
+             for the sc-04/sc-05 journeys, not yet verified green — see "Blocking defect")
   steps/     Cucumber step definitions, one class per .feature file
   runner/    CucumberSuite — the JUnit 5 Suite entry point (`mvn test`)
 src/test/resources/features/   one .feature file per story-map §6 subsection with an e2e row
