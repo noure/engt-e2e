@@ -401,6 +401,13 @@ it has not actually run green. It stays in the working tree for whoever picks th
    catching further out, after `complete`'s own transaction has already committed) so a deferred closure can
    never poison the demand-completion transaction that is supposed to survive it.
 
+**Byproduct on the shared platform**: every attempt this session made at this journey left its own test
+Contract permanently `CLOSING_IN_PROGRESS` (`PRF-000084`, `085`, `094`, `095`, `104`, `105`, `114`, `115` —
+all `E2E`-prefixed Banks/Accounts, per this suite's own hygiene convention) since closure can never actually
+complete until defect 2 above is fixed. Harmless (no destructive operation, nothing a human tester's own
+running example could collide with) but left as-is rather than force-closed, matching this project's own
+rule never to perform a write this suite's real flows would not themselves perform.
+
 **How this was diagnosed** (verified by tracing, not guessed, per this project's own rule): every claim
 above is backed by a live reproduction — direct, read-only `psql` queries against the shared PostgreSQL
 (`contract.outbox`, `contract.schedule_entry`, `contract.recalculation_demand`, `contract.processed_event`,
