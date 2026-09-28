@@ -429,6 +429,59 @@ existing `ProfileProgress` ledger row, refused `NOT_FOUND` — permanently, neve
 that never received any Balance yet) — but then hit defect 2 above, which no test-side fixture redesign can
 work around.
 
+**Update (follow-up session): the three 1-CP defects above are now fixed and verified; the journey is
+still blocked, by a fourth, different, newly-found defect — the fixture is not committed.**
+`contract-pricing-manager` (branch `develop`) now has, each its own commit: (1) a real
+`interest-settlement-output` consumer (`SettlementExecutedListener` → `ApplySettlementExecutedService`)
+that marks the matching `schedule_entry` row DONE once `evt-settlement-executed.v1` arrives — defect 2
+above, closed; (2) `CompleteRecalculationDemandService`'s transaction-propagation bug fixed by moving the
+best-effort closure replay out of its own transaction, into the `interest-recalculation-events` listener,
+called strictly after `complete`'s own transaction commits — defect 3 above, closed (a first fix using
+`PROPAGATION_REQUIRES_NEW` was tried and reverted: it broke a different, already-passing 1-CP scenario for
+a genuine transaction-visibility reason, see that repo's own commit message); (3) the double-PENDING
+`schedule_entry` collision of the earlier sc-10 session (line 209 above) also fixed, by design decision
+(keep the latest colliding Theoretical Date per Due Date) — unrelated to closure directly but the same
+batch. Full `contract-pricing-manager` reactor verified green (431/431 non-`@UC-63` Cucumber scenarios, all
+unit tests, `ArchitectureTest`) before rebuilding and redeploying its live container.
+
+Popping the stash (after resolving one trivial package-rename merge conflict from the meanwhile-landed
+rename commit) and rerunning `sc-10-settlement-execution.feature`'s two closure scenarios against the
+rebuilt container found and fixed one more real defect first: `SettlementExecutionSteps` published the
+CLOSED account event and returned immediately (Kafka, asynchronous), with nothing awaiting 1-CP having
+actually applied it before delivering the closure-date Balance right behind it — a race that could let
+2-Interest Servicing's own synchronous, one-shot settle-if-due evaluation of that Balance see a stale
+(not-yet-CLOSURE) `settlement-due` answer. Fixed by polling `GET .../settlement-due` for `reason=CLOSURE`
+before proceeding (`ContractPricingManagerClient.settlementDue`, `SettlementExecutionSteps
+.awaitClosureAppliedOn1Cp`), mirroring the existing `theContractIsWithTermDateEqual...` polling pattern
+already used one step earlier in the same journey.
+
+That fix alone was not enough — both scenarios still fail the same way (`No CLOSURE Settlement ... within
+90s`) with fresh Contracts. Traced to the real root cause, **not fixable from either side without a
+fixture redesign**: `SettleIfDueService.settleIfDue` (2-IS) decides whether anything is due by calling
+`contractPricing.settlementDue(item.profileId(), clock.processDate())` — `clock` is 2-IS's own
+`SystemBusinessClock` (the real OS wall-clock date in the live container), **not** the work item's own
+Value Date and not any date derived from the Balance just processed. Confirmed live: `curl
+.../settlement-due?processDate=2026-09-29` (the fixture's own Closure Date, "the day after" the cycle's
+Value Date) answers `due:true, reason:CLOSURE` correctly — 1-CP's own side is completely correct — but
+`interestservicing.settlement` never gains a CLOSURE row, because 2-IS is asking about
+`clock.processDate()` = the real "today" (one day *before* the fixture's Closure Date) the entire time the
+test runs, and the real calendar date cannot roll over inside a 90-second run. `settleIfDue`'s own comment
+confirms the intended remedy is out of scope here too: `if (!due.due()) return; // ... the next Daily Run
+asks again` — no scheduler in `SchedulersConfiguration` retries a cleanly-"not yet due" work item; only
+parked balances and a Deadline watch are polled. This is exactly why the fixture picks "the day after" in
+the first place (documented above): the *same-day* alternative was already ruled out because it races
+`TriggerRecalculationService`'s own `ProfileMutex` bug (a confirmed, separate, still-unfixed 2-IS
+concurrency defect) — so the fixture is caught between two independent, unfixed 2-IS-side gaps, and no
+change on 1-CP's side (nor a small fixture tweak) resolves either. A genuine redesign of this journey's
+timing strategy — e.g., a way to advance 2-IS's own process date for the test, or to trigger its
+settle-if-due check for an explicit date rather than relying on its wall clock — is needed, and is 2-IS's
+own domain decision to make, the same way defect 2 above was 1-CP's.
+
+Per this project's own rule, the journey is **still not committed** — the stash was updated (dropped and
+re-pushed, same three files plus the new `ContractPricingManagerClient.settlementDue` addition) with this
+message rather than the original one, so the await-for-CLOSED-event fix is preserved for whoever continues
+this next; the underlying 2-IS timing gap is not something this repository can work around on its own.
+
 ## What is covered so far (this session)
 
 **Scaffold**: Maven project (JDK 25 via `--release 21`, matching the other C-ICE service repos'
