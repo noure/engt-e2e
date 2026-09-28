@@ -1,4 +1,4 @@
-package com.bnpp.itg.tas.ido.cice.e2e.support;
+package com.bnpparibas.cib.cice.e2e.support;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -18,7 +18,7 @@ public final class BalanceIntakeEvents {
     private BalanceIntakeEvents() {
     }
 
-    /** One certified Balance for one Account, one Value Date — the nominal case of UC-19 step 1. */
+    /** One certified Balance for one Account, one Value Date â€” the nominal case of UC-19 step 1. */
     public static String certifiedNominalBalance(String eventId, String accountId, String bankId, LocalDate valueDate,
                                                   BigDecimal amount, String currency, LocalDate businessDate) {
         JsonObject balance = JsonObject.of()

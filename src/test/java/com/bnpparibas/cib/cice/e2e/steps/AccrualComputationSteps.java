@@ -1,10 +1,10 @@
-package com.bnpp.itg.tas.ido.cice.e2e.steps;
+package com.bnpparibas.cib.cice.e2e.steps;
 
-import com.bnpp.itg.tas.ido.cice.e2e.clients.InterestServicingClient;
-import com.bnpp.itg.tas.ido.cice.e2e.support.ApiResponse;
-import com.bnpp.itg.tas.ido.cice.e2e.support.BalanceIntakeEvents;
-import com.bnpp.itg.tas.ido.cice.e2e.support.DailyAccrualFixture;
-import com.bnpp.itg.tas.ido.cice.e2e.support.KafkaSupport;
+import com.bnpparibas.cib.cice.e2e.clients.InterestServicingClient;
+import com.bnpparibas.cib.cice.e2e.support.ApiResponse;
+import com.bnpparibas.cib.cice.e2e.support.BalanceIntakeEvents;
+import com.bnpparibas.cib.cice.e2e.support.DailyAccrualFixture;
+import com.bnpparibas.cib.cice.e2e.support.KafkaSupport;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
@@ -17,7 +17,7 @@ import java.time.LocalDate;
 import java.util.UUID;
 
 /**
- * Step definitions of sc-05-daily-accrual-computation.feature's e2e scenario — UC-23 "Resolve the
+ * Step definitions of sc-05-daily-accrual-computation.feature's e2e scenario â€” UC-23 "Resolve the
  * applicable terms", UC-25 "Compute the charge", UC-26 "Persist Snapshot with proof". Distinct wording
  * from BalanceIntakeSteps' Given/When to avoid Cucumber step-definition ambiguity, sharing the same
  * DailyAccrualFixture / BalanceIntakeEvents helpers as sc-04 (see the feature file's own NOTE for the
@@ -62,10 +62,10 @@ public class AccrualComputationSteps {
         assertEquals(expectedDayBasis, lastSnapshot.get("appliedDayBasis").asInt(), "appliedDayBasis of the Snapshot");
         JsonNode slabDetails = lastSnapshot.get("slabDetails");
         if (slabDetails == null || !slabDetails.isArray() || slabDetails.isEmpty()) {
-            throw new AssertionError("Expected at least one slab detail on the Snapshot's proof — got " + lastSnapshot);
+            throw new AssertionError("Expected at least one slab detail on the Snapshot's proof â€” got " + lastSnapshot);
         }
         if (lastSnapshot.path("conditionVersionId").asText(null) == null) {
-            throw new AssertionError("Expected the Snapshot's proof to name the priced tariff version (conditionVersionId) — got " + lastSnapshot);
+            throw new AssertionError("Expected the Snapshot's proof to name the priced tariff version (conditionVersionId) â€” got " + lastSnapshot);
         }
     }
 
@@ -105,7 +105,7 @@ public class AccrualComputationSteps {
     private static void require(ApiResponse response, int expectedStatus, String operation) {
         if (response.status() != expectedStatus) {
             throw new AssertionError(operation + " expected HTTP " + expectedStatus + " but got " + response.status()
-                    + " — body: " + response.rawBody());
+                    + " â€” body: " + response.rawBody());
         }
     }
 

@@ -1,4 +1,4 @@
-package com.bnpp.itg.tas.ido.cice.e2e.support;
+package com.bnpparibas.cib.cice.e2e.support;
 
 import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -23,7 +23,7 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 /**
- * Real Kafka producer/consumer helpers against the live broker of the platform — no embedded
+ * Real Kafka producer/consumer helpers against the live broker of the platform â€” no embedded
  * broker, no mock. Used to (a) act as the external producers this environment does not run
  * (C-CLIPS Account inventory / Entry manager publish {@code interest-account-intake} and
  * {@code interest-balance-intake} in production) and (b) observe the real outbox topics the
@@ -54,7 +54,7 @@ public final class KafkaSupport {
     }
 
     /**
-     * A consumer assigned (not subscribed — no consumer-group rebalance delay) to every partition of
+     * A consumer assigned (not subscribed â€” no consumer-group rebalance delay) to every partition of
      * {@code topic}, seeked to the current end. Create it BEFORE triggering the action under test so
      * only records produced from this point on are visible to {@link #awaitRecord}.
      */

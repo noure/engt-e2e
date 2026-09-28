@@ -623,7 +623,7 @@ settlement journey works around it by using a non-exempt test Client instead.
 ## Project layout
 
 ```
-src/test/java/com/bnpp/itg/tas/ido/cice/e2e/
+src/test/java/com/bnpparibas/cib/cice/e2e/
   clients/   one HTTP client class per service (ContractPricingManagerClient, InterestServicingClient,
              InterestCalculationClient, SettlementComputationClient, RestitutionClient)
   support/   Config (base URLs, env-overridable), HttpSupport + ApiResponse (java.net.http wrapper,

@@ -1,11 +1,11 @@
-package com.bnpp.itg.tas.ido.cice.e2e.steps;
+package com.bnpparibas.cib.cice.e2e.steps;
 
-import com.bnpp.itg.tas.ido.cice.e2e.clients.ContractPricingManagerClient;
-import com.bnpp.itg.tas.ido.cice.e2e.support.AccountIntakeEvents;
-import com.bnpp.itg.tas.ido.cice.e2e.support.ApiResponse;
-import com.bnpp.itg.tas.ido.cice.e2e.support.JsonObject;
-import com.bnpp.itg.tas.ido.cice.e2e.support.KafkaSupport;
-import com.bnpp.itg.tas.ido.cice.e2e.support.ReferenceDataBridge;
+import com.bnpparibas.cib.cice.e2e.clients.ContractPricingManagerClient;
+import com.bnpparibas.cib.cice.e2e.support.AccountIntakeEvents;
+import com.bnpparibas.cib.cice.e2e.support.ApiResponse;
+import com.bnpparibas.cib.cice.e2e.support.JsonObject;
+import com.bnpparibas.cib.cice.e2e.support.KafkaSupport;
+import com.bnpparibas.cib.cice.e2e.support.ReferenceDataBridge;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Step definitions of sc-02-contract-set-up-and-lifecycle.feature's e2e scenario(s) — UC-08 "Open a
+ * Step definitions of sc-02-contract-set-up-and-lifecycle.feature's e2e scenario(s) â€” UC-08 "Open a
  * contract". One fresh instance per scenario (Cucumber's default object factory), so instance fields
  * safely carry state from Given through Then with no cross-scenario leakage.
  */
@@ -53,10 +53,10 @@ public class ContractSetupSteps {
         ApiResponse currencies = cp.deliverCurrencies("EUR", 2);
         require(currencies, 200, "deliverCurrencies");
 
-        // Known gap (no REST feed for Bank / Default Product) — see ReferenceDataBridge's javadoc.
+        // Known gap (no REST feed for Bank / Default Product) â€” see ReferenceDataBridge's javadoc.
         ReferenceDataBridge.ensureBank(bankCode, countryCode, "E2E Test Bank", "Europe/Paris", "CIB_GB", LocalDate.of(2030, 12, 31));
 
-        // Known gap: catalogue.charge_type is shared vocabulary with no REST feed — see ReferenceDataBridge's javadoc.
+        // Known gap: catalogue.charge_type is shared vocabulary with no REST feed â€” see ReferenceDataBridge's javadoc.
         ReferenceDataBridge.ensureChargeType(chargeCode, "Credit Interest", "INTEREST");
 
         // Real REST: product creation, charges, offered periodicities, four-eyes propose/validate.
@@ -99,7 +99,7 @@ public class ContractSetupSteps {
         int versionNo = proposed.intValue("versionNo");
         require(cp.validateConditionVersion(conditionId, versionNo, VALIDATOR), 200, "validateConditionVersion");
 
-        // Known gap: designates the Default Product of (country, CURRENT) — see ReferenceDataBridge's javadoc.
+        // Known gap: designates the Default Product of (country, CURRENT) â€” see ReferenceDataBridge's javadoc.
         ReferenceDataBridge.ensureDefaultProduct(countryCode, "CURRENT", productCode);
     }
 
@@ -161,7 +161,7 @@ public class ContractSetupSteps {
     private static void require(ApiResponse response, int expectedStatus, String operation) {
         if (response.status() != expectedStatus) {
             throw new AssertionError(operation + " expected HTTP " + expectedStatus + " but got " + response.status()
-                    + " — body: " + response.rawBody());
+                    + " â€” body: " + response.rawBody());
         }
     }
 

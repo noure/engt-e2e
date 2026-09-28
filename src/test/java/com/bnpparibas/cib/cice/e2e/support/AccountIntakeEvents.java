@@ -1,4 +1,4 @@
-package com.bnpp.itg.tas.ido.cice.e2e.support;
+package com.bnpparibas.cib.cice.e2e.support;
 
 import java.time.Instant;
 import java.time.LocalDate;

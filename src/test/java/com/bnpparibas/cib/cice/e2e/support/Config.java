@@ -1,4 +1,4 @@
-package com.bnpp.itg.tas.ido.cice.e2e.support;
+package com.bnpparibas.cib.cice.e2e.support;
 
 /**
  * Every base address the suite talks to, each overridable by an environment variable so the same

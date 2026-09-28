@@ -1,8 +1,8 @@
-package com.bnpp.itg.tas.ido.cice.e2e.clients;
+package com.bnpparibas.cib.cice.e2e.clients;
 
-import com.bnpp.itg.tas.ido.cice.e2e.support.ApiResponse;
-import com.bnpp.itg.tas.ido.cice.e2e.support.Config;
-import com.bnpp.itg.tas.ido.cice.e2e.support.HttpSupport;
+import com.bnpparibas.cib.cice.e2e.support.ApiResponse;
+import com.bnpparibas.cib.cice.e2e.support.Config;
+import com.bnpparibas.cib.cice.e2e.support.HttpSupport;
 
 /**
  * Real HTTP client for 5-Restitution ({@code api/v14.1/5-restitution-api.yaml}).
@@ -23,7 +23,7 @@ public final class RestitutionClient {
         return http.get("/actuator/health");
     }
 
-    /** {@code GET /api/statements/by-profile/{profileId}} — verifies the direct-call Statement attachment of UC-08 step 10. */
+    /** {@code GET /api/statements/by-profile/{profileId}} â€” verifies the direct-call Statement attachment of UC-08 step 10. */
     public ApiResponse getStatementByProfile(String profileId) {
         return http.get("/api/statements/by-profile/" + profileId);
     }

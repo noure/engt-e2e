@@ -1,8 +1,8 @@
-package com.bnpp.itg.tas.ido.cice.e2e.clients;
+package com.bnpparibas.cib.cice.e2e.clients;
 
-import com.bnpp.itg.tas.ido.cice.e2e.support.ApiResponse;
-import com.bnpp.itg.tas.ido.cice.e2e.support.Config;
-import com.bnpp.itg.tas.ido.cice.e2e.support.HttpSupport;
+import com.bnpparibas.cib.cice.e2e.support.ApiResponse;
+import com.bnpparibas.cib.cice.e2e.support.Config;
+import com.bnpparibas.cib.cice.e2e.support.HttpSupport;
 
 /**
  * Real HTTP client for 4-Settlement Computation. Like 3-IC, it is a pure function with no broker

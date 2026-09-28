@@ -1,10 +1,10 @@
-package com.bnpp.itg.tas.ido.cice.e2e.steps;
+package com.bnpparibas.cib.cice.e2e.steps;
 
-import com.bnpp.itg.tas.ido.cice.e2e.clients.InterestServicingClient;
-import com.bnpp.itg.tas.ido.cice.e2e.support.ApiResponse;
-import com.bnpp.itg.tas.ido.cice.e2e.support.BalanceIntakeEvents;
-import com.bnpp.itg.tas.ido.cice.e2e.support.DailyAccrualFixture;
-import com.bnpp.itg.tas.ido.cice.e2e.support.KafkaSupport;
+import com.bnpparibas.cib.cice.e2e.clients.InterestServicingClient;
+import com.bnpparibas.cib.cice.e2e.support.ApiResponse;
+import com.bnpparibas.cib.cice.e2e.support.BalanceIntakeEvents;
+import com.bnpparibas.cib.cice.e2e.support.DailyAccrualFixture;
+import com.bnpparibas.cib.cice.e2e.support.KafkaSupport;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
@@ -17,7 +17,7 @@ import java.time.LocalDate;
 import java.util.UUID;
 
 /**
- * Step definitions of sc-04-daily-balance-intake.feature's e2e scenario(s) — UC-19 "Receive the end-of-day
+ * Step definitions of sc-04-daily-balance-intake.feature's e2e scenario(s) â€” UC-19 "Receive the end-of-day
  * Balances". See the feature file's own NOTE for the Work Item status observability gap this class works
  * around (getPositions / getSnapshots instead of the unusable {@code GET /api/work/{workId}}).
  */
@@ -153,7 +153,7 @@ public class BalanceIntakeSteps {
     private static void require(ApiResponse response, int expectedStatus, String operation) {
         if (response.status() != expectedStatus) {
             throw new AssertionError(operation + " expected HTTP " + expectedStatus + " but got " + response.status()
-                    + " — body: " + response.rawBody());
+                    + " â€” body: " + response.rawBody());
         }
     }
 

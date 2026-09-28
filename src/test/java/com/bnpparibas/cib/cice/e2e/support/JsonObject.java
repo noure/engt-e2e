@@ -1,9 +1,9 @@
-package com.bnpp.itg.tas.ido.cice.e2e.support;
+package com.bnpparibas.cib.cice.e2e.support;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** A tiny fluent builder for request bodies — avoids a DTO class per endpoint for a suite this size. */
+/** A tiny fluent builder for request bodies â€” avoids a DTO class per endpoint for a suite this size. */
 public final class JsonObject extends LinkedHashMap<String, Object> {
 
     public static JsonObject of() {

@@ -1,11 +1,11 @@
-package com.bnpp.itg.tas.ido.cice.e2e.steps;
+package com.bnpparibas.cib.cice.e2e.steps;
 
-import com.bnpp.itg.tas.ido.cice.e2e.clients.ContractPricingManagerClient;
-import com.bnpp.itg.tas.ido.cice.e2e.clients.InterestServicingClient;
-import com.bnpp.itg.tas.ido.cice.e2e.support.ApiResponse;
-import com.bnpp.itg.tas.ido.cice.e2e.support.BalanceIntakeEvents;
-import com.bnpp.itg.tas.ido.cice.e2e.support.DailyAccrualFixture;
-import com.bnpp.itg.tas.ido.cice.e2e.support.KafkaSupport;
+import com.bnpparibas.cib.cice.e2e.clients.ContractPricingManagerClient;
+import com.bnpparibas.cib.cice.e2e.clients.InterestServicingClient;
+import com.bnpparibas.cib.cice.e2e.support.ApiResponse;
+import com.bnpparibas.cib.cice.e2e.support.BalanceIntakeEvents;
+import com.bnpparibas.cib.cice.e2e.support.DailyAccrualFixture;
+import com.bnpparibas.cib.cice.e2e.support.KafkaSupport;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
@@ -18,7 +18,7 @@ import java.time.LocalDate;
 import java.util.UUID;
 
 /**
- * Step definitions of sc-06-missing-rate-recovery.feature's e2e scenario(s) — UC-28 "Defer a Work Item on a
+ * Step definitions of sc-06-missing-rate-recovery.feature's e2e scenario(s) â€” UC-28 "Defer a Work Item on a
  * Missing Rate", UC-29 "Retry once", UC-30 "Apply the Fallback Rate". Reuses DailyAccrualFixture /
  * BalanceIntakeEvents from sc-04/sc-05, but on a FLOATING Slab referencing a Shared Index this class
  * registers fresh for every scenario (see DailyAccrualFixture's Javadoc for why it is never one of WireMock's
@@ -70,7 +70,7 @@ public class MissingRateSteps {
             JsonNode snapshot = findSnapshot(expectedChargeCode);
             if (snapshot != null) {
                 throw new AssertionError("Expected no Snapshot yet for " + expectedChargeCode + " on " + valueDate
-                        + " (a Missing Rate should defer the Work Item, not compute one) — got " + snapshot);
+                        + " (a Missing Rate should defer the Work Item, not compute one) â€” got " + snapshot);
             }
             sleep(1000);
         }
@@ -80,7 +80,7 @@ public class MissingRateSteps {
     public void withinSecondsTheSnapshotIsProvisional(int timeoutSeconds, String expectedChargeCode) {
         JsonNode snapshot = awaitSnapshot(expectedChargeCode, timeoutSeconds);
         if (!snapshot.path("provisional").asBoolean(false)) {
-            throw new AssertionError("Expected the Snapshot to be provisional (computed on the Fallback Rate, BR-230) — got " + snapshot);
+            throw new AssertionError("Expected the Snapshot to be provisional (computed on the Fallback Rate, BR-230) â€” got " + snapshot);
         }
     }
 
@@ -88,7 +88,7 @@ public class MissingRateSteps {
     public void withinSecondsTheSnapshotIsNotProvisional(int timeoutSeconds, String expectedChargeCode) {
         JsonNode snapshot = awaitSnapshot(expectedChargeCode, timeoutSeconds);
         if (snapshot.path("provisional").asBoolean(false)) {
-            throw new AssertionError("Expected the Snapshot NOT to be provisional (the ordinary retry found the Rate Fixing) — got " + snapshot);
+            throw new AssertionError("Expected the Snapshot NOT to be provisional (the ordinary retry found the Rate Fixing) â€” got " + snapshot);
         }
     }
 
@@ -106,7 +106,7 @@ public class MissingRateSteps {
             throw new AssertionError("Expected an OPEN Provisional Charge for Contract " + contract.contractId() + " within " + timeoutSeconds + "s");
         }
         if (found.path("indexCode").asText(null) == null || found.path("fallbackRate").isMissingNode()) {
-            throw new AssertionError("Expected the Provisional Charge to carry indexCode and fallbackRate (BR-230 proof) — got " + found);
+            throw new AssertionError("Expected the Provisional Charge to carry indexCode and fallbackRate (BR-230 proof) â€” got " + found);
         }
     }
 
@@ -114,7 +114,7 @@ public class MissingRateSteps {
     public void noProvisionalChargeExists() {
         JsonNode found = findProvisionalCharge();
         if (found != null) {
-            throw new AssertionError("Expected no Provisional Charge for Contract " + contract.contractId() + " — got " + found);
+            throw new AssertionError("Expected no Provisional Charge for Contract " + contract.contractId() + " â€” got " + found);
         }
     }
 
@@ -165,7 +165,7 @@ public class MissingRateSteps {
     private static void require(ApiResponse response, int expectedStatus, String operation) {
         if (response.status() != expectedStatus) {
             throw new AssertionError(operation + " expected HTTP " + expectedStatus + " but got " + response.status()
-                    + " — body: " + response.rawBody());
+                    + " â€” body: " + response.rawBody());
         }
     }
 

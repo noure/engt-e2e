@@ -1,10 +1,10 @@
-package com.bnpp.itg.tas.ido.cice.e2e.support;
+package com.bnpparibas.cib.cice.e2e.support;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.math.BigDecimal;
 
-/** The status code and parsed JSON body of one real HTTP call — every client method returns this, never a mock. */
+/** The status code and parsed JSON body of one real HTTP call â€” every client method returns this, never a mock. */
 public record ApiResponse(int status, JsonNode body, String rawBody) {
 
     public boolean isSuccess() {

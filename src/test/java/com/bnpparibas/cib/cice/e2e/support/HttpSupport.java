@@ -1,4 +1,4 @@
-package com.bnpp.itg.tas.ido.cice.e2e.support;
+package com.bnpparibas.cib.cice.e2e.support;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.MissingNode;
@@ -14,7 +14,7 @@ import java.util.Map;
 
 /**
  * Thin, dependency-free wrapper around {@link java.net.http.HttpClient} shared by every per-service client.
- * Talks to real HTTP endpoints only — there is no in-process fake behind this class.
+ * Talks to real HTTP endpoints only â€” there is no in-process fake behind this class.
  */
 public final class HttpSupport {
 
@@ -78,7 +78,7 @@ public final class HttpSupport {
             JsonNode json = MissingNode.getInstance();
             if (raw != null && !raw.isBlank()) {
                 // exact decimals (BigDecimal, not double): a Snapshot's Raw Amount is compared at scale 10
-                // (README "Nothing is rounded") — the same reader configuration the services themselves use
+                // (README "Nothing is rounded") â€” the same reader configuration the services themselves use
                 // to parse the intake payload (BalanceIntakeParser).
                 json = JsonSupport.MAPPER.reader()
                         .with(com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)

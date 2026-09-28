@@ -1,10 +1,10 @@
-package com.bnpp.itg.tas.ido.cice.e2e.steps;
+package com.bnpparibas.cib.cice.e2e.steps;
 
-import com.bnpp.itg.tas.ido.cice.e2e.clients.InterestServicingClient;
-import com.bnpp.itg.tas.ido.cice.e2e.support.ApiResponse;
-import com.bnpp.itg.tas.ido.cice.e2e.support.BalanceIntakeEvents;
-import com.bnpp.itg.tas.ido.cice.e2e.support.DailyAccrualFixture;
-import com.bnpp.itg.tas.ido.cice.e2e.support.KafkaSupport;
+import com.bnpparibas.cib.cice.e2e.clients.InterestServicingClient;
+import com.bnpparibas.cib.cice.e2e.support.ApiResponse;
+import com.bnpparibas.cib.cice.e2e.support.BalanceIntakeEvents;
+import com.bnpparibas.cib.cice.e2e.support.DailyAccrualFixture;
+import com.bnpparibas.cib.cice.e2e.support.KafkaSupport;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
@@ -21,14 +21,14 @@ import java.time.LocalDate;
 import java.util.UUID;
 
 /**
- * Step definitions of sc-10-settlement-execution.feature's e2e scenario — UC-46 "Trigger settlement on
+ * Step definitions of sc-10-settlement-execution.feature's e2e scenario â€” UC-46 "Trigger settlement on
  * its due date", UC-50/UC-51 "Persist the Settlement with its proof, published once". Distinct wording
  * from AccrualComputationSteps' / BalanceIntakeSteps' Given/When to avoid Cucumber step-definition
  * ambiguity (the same convention MissingRateSteps already follows), sharing DailyAccrualFixture and
  * BalanceIntakeEvents.
  *
  * <p>This is the first journey of this suite to consume a real outbox topic rather than only produce to
- * one — {@code KafkaSupport.newConsumerAtEnd}/{@code awaitRecord} existed since the scaffold but every
+ * one â€” {@code KafkaSupport.newConsumerAtEnd}/{@code awaitRecord} existed since the scaffold but every
  * prior journey only observed outcomes through REST reads (see README.md "Known gap: the Work Item
  * status endpoint" and sc-04's own NOTE on {@code EVT-BalanceReceived} not being observed directly).
  */
@@ -70,13 +70,13 @@ public class SettlementExecutionSteps {
         assertEquals("MATURITY", settlement.path("reason").asText(), "reason of the Settlement");
         assertEquals(cycleDate.toString(), settlement.path("cycleStart").asText(), "cycleStart of the Settlement");
         assertEquals(cycleDate.toString(), settlement.path("cycleEnd").asText(), "cycleEnd of the Settlement");
-        // NOTE — interestNet (the CREIN gross amount, unaffected by WHT) is what getSettlements actually
+        // NOTE â€” interestNet (the CREIN gross amount, unaffected by WHT) is what getSettlements actually
         // exposes; the tax-adjusted netToSettle has no REST field at all (Settlement schema, entrypoint
-        // openapi.yaml) — see README.md "Found live: a WHT rate-unit mismatch..." for why this scenario does
+        // openapi.yaml) â€” see README.md "Found live: a WHT rate-unit mismatch..." for why this scenario does
         // not attempt to assert the tax-adjusted amount at all, only that a Settlement with correct identity,
         // cycle bounds and gross interest exists.
         if (!settlement.hasNonNull("interestNet")) {
-            throw new AssertionError("Expected the Settlement to carry interestNet — got " + settlement);
+            throw new AssertionError("Expected the Settlement to carry interestNet â€” got " + settlement);
         }
         BigDecimal interestNet = settlement.get("interestNet").decimalValue();
         assertEquals(0, expectedInterestNet.compareTo(interestNet), "interestNet of the Settlement");
@@ -97,7 +97,7 @@ public class SettlementExecutionSteps {
             }
         }
         if (!found) {
-            throw new AssertionError("Expected a CREDIT entry for Charge " + chargeCode + " — got " + lastSettlement);
+            throw new AssertionError("Expected a CREDIT entry for Charge " + chargeCode + " â€” got " + lastSettlement);
         }
     }
 
@@ -142,7 +142,7 @@ public class SettlementExecutionSteps {
             sleep(1000);
         }
         throw new AssertionError("Expected the " + chargeCode + " Snapshot of " + cycleDate + " to be " + expectedStatus
-                + " within 30s — last seen: " + snapshot);
+                + " within 30s â€” last seen: " + snapshot);
     }
 
     private boolean matches(ConsumerRecord<String, String> record, String eventVersion) {
